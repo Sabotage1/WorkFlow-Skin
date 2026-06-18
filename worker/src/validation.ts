@@ -117,10 +117,7 @@ export function validateRecommendationInput(input: unknown): ValidationResult<Re
       id: requireString(bag, "id", missing, "bag.id"),
       beanId: requireString(bag, "beanId", missing, "bag.beanId"),
       roaster: requireString(bag, "roaster", missing, "bag.roaster"),
-      bean: requireString(bag, "bean", missing, "bag.bean"),
-      country: requireString(bag, "country", missing, "bag.country"),
-      process: requireString(bag, "process", missing, "bag.process"),
-      roastDate: requireString(bag, "roastDate", missing, "bag.roastDate")
+      bean: requireString(bag, "bean", missing, "bag.bean")
     },
     profile: {
       originalId: requireString(profile, "originalId", missing, "profile.originalId"),
@@ -142,8 +139,14 @@ export function validateRecommendationInput(input: unknown): ValidationResult<Re
 
   const bagName = optionalText(bag, "name");
   if (bagName) normalized.bag.name = bagName;
+  const bagCountry = optionalText(bag, "country");
+  if (bagCountry) normalized.bag.country = bagCountry;
   const bagRegion = optionalText(bag, "region");
   if (bagRegion) normalized.bag.region = bagRegion;
+  const bagProcess = optionalText(bag, "process");
+  if (bagProcess) normalized.bag.process = bagProcess;
+  const bagRoastDate = optionalText(bag, "roastDate");
+  if (bagRoastDate) normalized.bag.roastDate = bagRoastDate;
   const bagRoastLevel = optionalText(bag, "roastLevel");
   if (bagRoastLevel) normalized.bag.roastLevel = bagRoastLevel;
   const bagNotes = optionalText(bag, "notes");

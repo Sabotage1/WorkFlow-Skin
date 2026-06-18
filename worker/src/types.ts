@@ -4,10 +4,10 @@ export interface BagSnapshot {
   roaster: string;
   name?: string;
   bean: string;
-  country: string;
+  country?: string;
   region?: string;
-  process: string;
-  roastDate: string;
+  process?: string;
+  roastDate?: string;
   roastLevel?: string;
   notes?: string;
 }

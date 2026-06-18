@@ -76,13 +76,37 @@ describe("validateRecommendationInput", () => {
     expect(validateRecommendationInput({ ...validInput, brew: null })).toEqual({ ok: false, error: "Missing required fields: brew." });
   });
 
-  it("requires existing bag fields and brew fields", () => {
+  it("requires brew fields while allowing optional bag metadata to be blank", () => {
     const result = validateRecommendationInput({
       ...validInput,
-      bag: { ...validInput.bag, country: "" },
+      bag: { ...validInput.bag, country: "", process: "", roastDate: "" },
       brew: { ...validInput.brew, notes: "" }
     });
-    expect(result).toEqual({ ok: false, error: "Missing required fields: bag.country, brew.notes." });
+    expect(result).toEqual({ ok: false, error: "Missing required fields: brew.notes." });
+  });
+
+  it("accepts saved bags that do not have country, process, or roast date metadata", () => {
+    const result = validateRecommendationInput({
+      ...validInput,
+      bag: { ...validInput.bag, country: "", process: "", roastDate: "" }
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        ...validInput,
+        bag: {
+          id: "batch-1",
+          beanId: "bean-1",
+          roaster: "Pilot",
+          name: "Halo",
+          bean: "Ethiopia Halo",
+          region: "Yirgacheffe",
+          roastLevel: "Light",
+          notes: "floral"
+        }
+      }
+    });
   });
 
   it("requires flat or conical grinder burrs type", () => {
