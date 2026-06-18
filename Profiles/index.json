@@ -1,7 +1,44 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-18T18:48:12.019Z",
+  "updatedAt": "2026-06-18T19:39:31.424Z",
   "items": [
+    {
+      "id": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e",
+      "updatedAt": "2026-06-18T19:39:31.424Z",
+      "submittedBy": "Roy",
+      "bag": {
+        "id": "161c15a4-e937-4894-99e0-9431b85d0bf3",
+        "beanId": "92ed87e8-6265-4fb6-b931-b532144f2d2e",
+        "roaster": "DAK",
+        "bean": "Chiroso - Washed",
+        "roastLevel": "Light",
+        "notes": "Colombia - Honeymoon"
+      },
+      "profile": {
+        "originalId": "profile:70e61d862c2f458b7307",
+        "originalTitle": "Kawa or Witch HUnt Turbo (no bloom) 2",
+        "fileName": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json",
+        "installedTitle": "Kawa or Witch HUnt Turbo (no bloom) 2"
+      },
+      "grinder": {
+        "id": "f111a2a2-cdce-4d5c-9c79-7e4256af8208",
+        "model": "Turin: DF83",
+        "burrs": "SSP MP",
+        "burrType": "flat",
+        "settingType": "numeric"
+      },
+      "brew": {
+        "grindSetting": "10",
+        "beansWeight": 18.5,
+        "drinkWeight": 34,
+        "notes": "Cherry",
+        "secondsMin": 11,
+        "secondsMax": 15
+      },
+      "evidenceFileName": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json",
+      "shotScore": 10,
+      "searchText": "roy 161c15a4-e937-4894-99e0-9431b85d0bf3 92ed87e8-6265-4fb6-b931-b532144f2d2e dak chiroso - washed light colombia - honeymoon profile:70e61d862c2f458b7307 kawa or witch hunt turbo (no bloom) 2 rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json kawa or witch hunt turbo (no bloom) 2 f111a2a2-cdce-4d5c-9c79-7e4256af8208 turin: df83 flat ssp mp numeric 10 18.5 34 11 15 cherry rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json 10"
+    },
     {
       "id": "rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5",
       "updatedAt": "2026-06-18T18:48:12.019Z",
