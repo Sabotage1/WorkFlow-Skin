@@ -1,5 +1,45 @@
 {
   "version": 1,
-  "updatedAt": "1970-01-01T00:00:00.000Z",
-  "items": []
+  "updatedAt": "2026-06-18T18:48:12.019Z",
+  "items": [
+    {
+      "id": "rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5",
+      "updatedAt": "2026-06-18T18:48:12.019Z",
+      "submittedBy": "Mac",
+      "bag": {
+        "id": "f144b50f-98b2-489b-a4b4-78dffd94ae7a",
+        "beanId": "8abf421d-8914-4193-a6f1-36b0657f36cd",
+        "roaster": "DAK",
+        "bean": "Caturra",
+        "country": "Ethiopia",
+        "process": "Washed",
+        "roastDate": "2026-06-13T00:00:00.000Z",
+        "name": "Cream Donut",
+        "roastLevel": "Light"
+      },
+      "profile": {
+        "originalId": "profile:14e5df5518eeaa04a3f6",
+        "originalTitle": "TurboTurbo",
+        "fileName": "rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5.json",
+        "installedTitle": "TurboTurbo"
+      },
+      "grinder": {
+        "id": "0a73e4cb-edb8-40b5-8581-8e65d944c251",
+        "model": "DF83",
+        "burrs": "SSP MP",
+        "burrType": "flat",
+        "settingType": "numeric"
+      },
+      "brew": {
+        "grindSetting": "10",
+        "beansWeight": 18,
+        "drinkWeight": 42,
+        "notes": "Cherry",
+        "secondsMin": 11,
+        "secondsMax": 15
+      },
+      "evidenceFileName": "rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5.json",
+      "searchText": "mac f144b50f-98b2-489b-a4b4-78dffd94ae7a 8abf421d-8914-4193-a6f1-36b0657f36cd dak cream donut caturra ethiopia washed 2026-06-13t00:00:00.000z light profile:14e5df5518eeaa04a3f6 turboturbo rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5.json turboturbo 0a73e4cb-edb8-40b5-8581-8e65d944c251 df83 flat ssp mp numeric 10 18 42 11 15 cherry rec-2e0f29d2-f94c-46eb-89db-02ceac1d31e5.json"
+    }
+  ]
 }
