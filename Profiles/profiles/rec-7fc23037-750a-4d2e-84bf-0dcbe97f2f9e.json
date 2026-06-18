@@ -1,0 +1,125 @@
+{
+  "version": "2",
+  "title": "Kawa or Witch HUnt Turbo (no bloom) 2",
+  "notes": "This Kawa profile is intended to serve Nordic roasted coffee that is not difficult to extract but challenges in terms of avoiding roastiness flavors.\nWitch HUnt family of profiles is intended to imitate lever manipulations performed with coffee that is ground with High Uniformity particle distribution.",
+  "author": "Decent",
+  "beverage_type": "espresso",
+  "steps": [
+    {
+      "name": "Fill Fast Ramp Up",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 1.5
+      },
+      "volume": 120,
+      "seconds": 6,
+      "weight": 0,
+      "temperature": 88,
+      "sensor": "coffee",
+      "flow": 5,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Fill Regulation 1",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 1.8
+      },
+      "volume": 100,
+      "seconds": 5,
+      "weight": 0,
+      "temperature": 88,
+      "sensor": "coffee",
+      "flow": 5,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Fill Regulation 2",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 2.2
+      },
+      "volume": 100,
+      "seconds": 4,
+      "weight": 0,
+      "temperature": 87,
+      "sensor": "coffee",
+      "flow": 2.5,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Pressure Increase",
+      "pump": "pressure",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 6.5
+      },
+      "volume": 100,
+      "seconds": 6,
+      "weight": 0,
+      "temperature": 86,
+      "sensor": "coffee",
+      "pressure": 9,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Pressure Gradual Decline",
+      "pump": "pressure",
+      "transition": "smooth",
+      "exit": null,
+      "volume": 100,
+      "seconds": 25,
+      "weight": 0,
+      "temperature": 86,
+      "sensor": "coffee",
+      "pressure": 2,
+      "limiter": {
+        "value": 4.5,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Finish pressure",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": null,
+      "volume": 100,
+      "seconds": 20,
+      "weight": 0,
+      "temperature": 86,
+      "sensor": "coffee",
+      "flow": 3,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    }
+  ],
+  "target_volume": 150,
+  "target_weight": 37,
+  "target_volume_count_start": 0,
+  "tank_temperature": 0
+}
