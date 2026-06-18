@@ -8,7 +8,8 @@ describe("community Worker scaffold", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("application/json");
     await expect(response.json()).resolves.toEqual({
-      error: "not_found",
+      error: "Not found",
+      code: "not_found",
       message: "Not found"
     });
   });

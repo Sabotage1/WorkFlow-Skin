@@ -120,15 +120,24 @@ describe("validateRecommendationInput", () => {
     });
   });
 
-  it("rejects known optional fields with invalid types", () => {
-    expect(validateRecommendationInput({ ...validInput, bag: { ...validInput.bag, region: 42 } })).toEqual({
-      ok: false,
-      error: "Invalid field types: bag.region."
+  it("normalizes non-critical optional metadata instead of rejecting uploads", () => {
+    expect(validateRecommendationInput({ ...validInput, bag: { ...validInput.bag, region: 42, roastLevel: 2 }, grinder: { ...validInput.grinder, settingType: "stepless" } })).toEqual({
+      ok: true,
+      value: {
+        ...validInput,
+        bag: { ...validInput.bag, region: "42", roastLevel: "2" },
+        grinder: {
+          id: "grinder-1",
+          model: "ZP6",
+          burrs: "MP",
+          burrType: "flat",
+          notes: "zero at chirp"
+        }
+      }
     });
-    expect(validateRecommendationInput({ ...validInput, grinder: { ...validInput.grinder, settingType: "stepless" } })).toEqual({
-      ok: false,
-      error: "Invalid field types: grinder.settingType."
-    });
+  });
+
+  it("rejects invalid visualizer URL types", () => {
     expect(validateRecommendationInput({ ...validInput, visualizerUrl: 42 })).toEqual({
       ok: false,
       error: "Invalid field types: visualizerUrl."

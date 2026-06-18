@@ -53,6 +53,15 @@ function optionalString(record: UnknownRecord, field: string, invalid: string[],
   return trimmed || undefined;
 }
 
+function optionalText(record: UnknownRecord, field: string): string | undefined {
+  const value = record[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return String(value);
+  return undefined;
+}
+
 function requireBurrType(record: UnknownRecord, field: string, missing: string[], invalid: string[], path: string = field): BurrType | undefined {
   const trimmed = cleanText(record[field]).toLowerCase();
   if (!trimmed) {
@@ -131,27 +140,25 @@ export function validateRecommendationInput(input: unknown): ValidationResult<Re
     }
   };
 
-  const bagName = optionalString(bag, "name", invalid, "bag.name");
+  const bagName = optionalText(bag, "name");
   if (bagName) normalized.bag.name = bagName;
-  const bagRegion = optionalString(bag, "region", invalid, "bag.region");
+  const bagRegion = optionalText(bag, "region");
   if (bagRegion) normalized.bag.region = bagRegion;
-  const bagRoastLevel = optionalString(bag, "roastLevel", invalid, "bag.roastLevel");
+  const bagRoastLevel = optionalText(bag, "roastLevel");
   if (bagRoastLevel) normalized.bag.roastLevel = bagRoastLevel;
-  const bagNotes = optionalString(bag, "notes", invalid, "bag.notes");
+  const bagNotes = optionalText(bag, "notes");
   if (bagNotes) normalized.bag.notes = bagNotes;
 
-  const grinderBurrs = optionalString(grinder, "burrs", invalid, "grinder.burrs");
+  const grinderBurrs = optionalText(grinder, "burrs");
   if (grinderBurrs) normalized.grinder.burrs = grinderBurrs;
   const grinderBurrType = requireBurrType(grinder, "burrType", missing, invalid, "grinder.burrType");
   if (grinderBurrType) normalized.grinder.burrType = grinderBurrType;
-  const grinderNotes = optionalString(grinder, "notes", invalid, "grinder.notes");
+  const grinderNotes = optionalText(grinder, "notes");
   if (grinderNotes) normalized.grinder.notes = grinderNotes;
   const settingType = grinder.settingType;
   if (settingType !== undefined && settingType !== null) {
     if (settingType === "numeric" || settingType === "preset") {
       normalized.grinder.settingType = settingType;
-    } else {
-      invalid.push("grinder.settingType");
     }
   }
 

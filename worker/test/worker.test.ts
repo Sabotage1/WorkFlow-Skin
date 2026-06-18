@@ -361,8 +361,8 @@ describe("community Worker API", () => {
     expect(missingSecretResponse.status).toBe(500);
     const blankSecretBody = await responseJson(blankSecretResponse);
     const missingSecretBody = await responseJson(missingSecretResponse);
-    expect(blankSecretBody).toMatchObject({ error: "server_error" });
-    expect(missingSecretBody).toMatchObject({ error: "server_error" });
+    expect(blankSecretBody).toMatchObject({ code: "server_error" });
+    expect(missingSecretBody).toMatchObject({ code: "server_error" });
     expect(JSON.stringify(blankSecretBody)).not.toContain("OWNER_KEY_SECRET");
     expect(JSON.stringify(missingSecretBody)).not.toContain("OWNER_KEY_SECRET");
     expect(github.writes).toHaveLength(0);
@@ -504,7 +504,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
   });
 
   it("rejects updates with the wrong owner key", async () => {
@@ -529,7 +529,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ error: "forbidden" });
+    await expect(response.json()).resolves.toMatchObject({ code: "forbidden" });
   });
 
   it("preserves existing evidence reference when update omits evidence", async () => {
@@ -645,7 +645,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
   });
 
   it("returns 413 for oversized request bodies before GitHub writes", async () => {
@@ -658,7 +658,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
     expect(github.writes).toHaveLength(0);
   });
 
@@ -675,7 +675,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
     expect(github.writes).toHaveLength(0);
   });
 
@@ -700,7 +700,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
     expect(github.writes).toHaveLength(0);
   });
 
@@ -722,7 +722,7 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
     expect(github.writes).toHaveLength(0);
   });
 
@@ -736,6 +736,23 @@ describe("community Worker API", () => {
     });
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: "bad_request" });
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
+  });
+
+  it("returns validation text in error for older skin error displays", async () => {
+    mockGithubContents();
+
+    const response = await jsonFetch("/api/recommendations", {
+      method: "POST",
+      body: JSON.stringify(createBody({ submittedBy: "person@example.com" })),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "bad_request",
+      error: "Public display name is required; email addresses are not allowed.",
+      message: "Public display name is required; email addresses are not allowed."
+    });
   });
 });

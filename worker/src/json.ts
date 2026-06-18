@@ -30,8 +30,8 @@ export function jsonResponse(value: unknown, init: ResponseInit = {}): Response 
 }
 
 export function errorResponse(message: string, status: number): Response {
-  const error = status === 403 ? "forbidden" : status === 404 ? "not_found" : status >= 500 ? "server_error" : "bad_request";
-  return jsonResponse({ error, message }, { status });
+  const code = status === 403 ? "forbidden" : status === 404 ? "not_found" : status >= 500 ? "server_error" : "bad_request";
+  return jsonResponse({ error: message, code, message }, { status });
 }
 
 export async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {
