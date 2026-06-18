@@ -17,6 +17,6 @@
     "MAX_BODY_BYTES": "750000"
   },
   "secrets": {
-    "required": ["GITHUB_TOKEN"]
+    "required": ["GITHUB_TOKEN", "OWNER_KEY_SECRET"]
   }
 }

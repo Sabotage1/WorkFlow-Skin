@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler check",
+    "check": "wrangler deploy --dry-run",
     "generate-types": "wrangler types src/worker-configuration.d.ts",
     "typecheck": "npm run generate-types && tsc --noEmit",
     "test": "npm run generate-types && vitest run"
