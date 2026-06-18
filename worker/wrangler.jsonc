@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "workflow-skin-community",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-18",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "GITHUB_OWNER": "Sabotage1",
+    "GITHUB_REPO": "WorkFlow-Skin",
+    "GITHUB_BRANCH": "main",
+    "PUBLIC_BASE_URL": "https://github.com/Sabotage1/WorkFlow-Skin/tree/main/Profiles",
+    "CORS_ALLOW_ORIGIN": "*",
+    "MAX_BODY_BYTES": "750000"
+  },
+  "secrets": {
+    "required": ["GITHUB_TOKEN"]
+  }
+}
