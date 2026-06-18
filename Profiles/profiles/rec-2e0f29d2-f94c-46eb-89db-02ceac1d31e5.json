@@ -1,0 +1,117 @@
+{
+  "version": "2",
+  "title": "TurboTurbo",
+  "notes": "Non-blooming turbo shot profile intended primarily for high extraction grinders with ending flow of 3-4.5ml/s. The profile uses maximum fill rate in preinfusion as coarse grinds saturate easily and quickly. Dial with ratio once grind is giving an ending flowrate in the range. Includes a significant temperature drop that reduces harshness (although the actual temperature drop is much less than programmed).  By Joe D.",
+  "author": "Decent",
+  "beverage_type": "espresso",
+  "steps": [
+    {
+      "name": "Fill start",
+      "pump": "pressure",
+      "transition": "fast",
+      "exit": null,
+      "volume": 0,
+      "seconds": 2,
+      "weight": 0,
+      "temperature": 86,
+      "sensor": "coffee",
+      "pressure": 5.999999999999996,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "Fill",
+      "pump": "pressure",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 2
+      },
+      "volume": 0,
+      "seconds": 2,
+      "weight": 0,
+      "temperature": 86,
+      "sensor": "coffee",
+      "pressure": 5.999999999999996,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "PI",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 4
+      },
+      "volume": 0,
+      "seconds": 20,
+      "weight": 0,
+      "temperature": 82,
+      "sensor": "coffee",
+      "flow": 5,
+      "limiter": {
+        "value": 0,
+        "range": 0.6
+      }
+    },
+    {
+      "name": "rise and hold",
+      "pump": "pressure",
+      "transition": "fast",
+      "exit": null,
+      "volume": 0,
+      "seconds": 5,
+      "weight": 0,
+      "temperature": 77,
+      "sensor": "coffee",
+      "pressure": 6,
+      "limiter": {
+        "value": 6,
+        "range": 1
+      }
+    },
+    {
+      "name": "decline",
+      "pump": "pressure",
+      "transition": "smooth",
+      "exit": null,
+      "volume": 0,
+      "seconds": 15,
+      "weight": 0,
+      "temperature": 77,
+      "sensor": "coffee",
+      "pressure": 4,
+      "limiter": {
+        "value": 4.5,
+        "range": 1
+      }
+    },
+    {
+      "name": "hold",
+      "pump": "pressure",
+      "transition": "smooth",
+      "exit": null,
+      "volume": 0,
+      "seconds": 60,
+      "weight": 0,
+      "temperature": 77,
+      "sensor": "coffee",
+      "pressure": 4,
+      "limiter": {
+        "value": 4.5,
+        "range": 1
+      }
+    }
+  ],
+  "target_volume": 0,
+  "target_weight": 35,
+  "target_volume_count_start": 2,
+  "tank_temperature": 0
+}
