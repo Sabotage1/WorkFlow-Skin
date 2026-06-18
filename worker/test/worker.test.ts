@@ -256,6 +256,7 @@ describe("community Worker API", () => {
             brew: baseRecommendation.brew,
             visualizerUrl: baseRecommendation.visualizerUrl,
             evidenceFileName: "rec-existing.json",
+            shotScore: 8,
             searchText: "halo",
             ownerHash: "leaked-item",
             extraField: "drop me"
@@ -292,6 +293,7 @@ describe("community Worker API", () => {
           brew: baseRecommendation.brew,
           visualizerUrl: baseRecommendation.visualizerUrl,
           evidenceFileName: "rec-existing.json",
+          shotScore: 8,
           searchText: "halo"
         }
       ]
@@ -317,7 +319,9 @@ describe("community Worker API", () => {
     expect("ownerHash" in recommendation).toBe(false);
     expect((recommendation.profile as Record<string, unknown>).fileName).toBe(`${recommendation.id}.json`);
     expect(recommendation.evidenceFileName).toBe(`${recommendation.id}.json`);
+    expect(recommendation.shotScore).toBe(8);
     expect((body.index as RecommendationIndex).items).toHaveLength(1);
+    expect((body.index as RecommendationIndex).items[0].shotScore).toBe(8);
 
     const id = recommendation.id as string;
     expect(github.writes.map((write) => write.path)).toEqual([
@@ -329,7 +333,8 @@ describe("community Worker API", () => {
     expect(github.writes[0].value).toMatchObject({
       id,
       profile: { fileName: `${id}.json` },
-      evidenceFileName: `${id}.json`
+      evidenceFileName: `${id}.json`,
+      shotScore: 8
     });
     expect(github.writes[0].value).toHaveProperty("ownerHash");
     expect((github.writes[0].value as RecommendationRecord).ownerHash).not.toBe(await hashOwnerKey("owner-key"));
@@ -548,8 +553,10 @@ describe("community Worker API", () => {
     expect(updateResponse.status).toBe(200);
     const body = await responseJson(updateResponse);
     expect((body.recommendation as RecommendationRecord).evidenceFileName).toBe(`${id}.json`);
+    expect((body.recommendation as RecommendationRecord).shotScore).toBe(8);
     const recommendationWrites = github.writes.filter((write) => write.path === `Profiles/recommendations/${id}.json`);
     expect((recommendationWrites.at(-1)?.value as RecommendationRecord).evidenceFileName).toBe(`${id}.json`);
+    expect((recommendationWrites.at(-1)?.value as RecommendationRecord).shotScore).toBe(8);
     expect(github.writes.filter((write) => write.path === `Profiles/evidence/${id}.json`)).toHaveLength(1);
   });
 

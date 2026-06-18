@@ -70,6 +70,7 @@ export interface RecommendationRecord extends RecommendationInput {
   createdAt: string;
   updatedAt: string;
   ownerHash: string;
+  shotScore?: number;
 }
 
 export type PublicRecommendationRecord = Omit<RecommendationRecord, "ownerHash">;
@@ -84,6 +85,7 @@ export interface RecommendationIndexItem {
   brew: BrewRecommendation;
   visualizerUrl?: string;
   evidenceFileName?: string;
+  shotScore?: number;
   searchText: string;
 }
 

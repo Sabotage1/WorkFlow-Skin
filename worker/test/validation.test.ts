@@ -271,6 +271,7 @@ describe("buildIndexItem", () => {
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
       ownerHash: "hash",
+      shotScore: 8,
       ...validInput
     });
 
@@ -283,7 +284,9 @@ describe("buildIndexItem", () => {
     expect(item.searchText).toContain("flat");
     expect(item.searchText).toContain("4.2");
     expect(item.searchText).toContain("gentle declining pressure");
+    expect(item.searchText).toContain("8");
     expect(item.searchText).toContain("visualizer.coffee");
+    expect(item.shotScore).toBe(8);
     expect(item.bag).toEqual(validInput.bag);
     expect(item.bag).not.toBe(validInput.bag);
     expect(item.profile).toEqual(validInput.profile);
@@ -302,6 +305,7 @@ describe("toPublicRecommendation", () => {
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
       ownerHash: "secret-hash",
+      shotScore: 8,
       ...validInput
     });
 
@@ -309,6 +313,7 @@ describe("toPublicRecommendation", () => {
       id: "rec-1",
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
+      shotScore: 8,
       ...validInput
     });
     expect("ownerHash" in publicRecord).toBe(false);

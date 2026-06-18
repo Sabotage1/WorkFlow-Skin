@@ -89,6 +89,11 @@ function evidenceFromBody(body: unknown): ShotEvidence | undefined | Response {
   return body.evidence as unknown as ShotEvidence;
 }
 
+function shotScoreFromEvidence(evidence: ShotEvidence | undefined): number | undefined {
+  const value = evidence?.enjoyment;
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(10, Math.max(1, Math.round(value))) : undefined;
+}
+
 async function recordsFromIndex(github: GitHubJsonClient, index: RecommendationIndex): Promise<RecommendationRecord[]> {
   const records = await Promise.all(
     index.items.map((item) => github.readJson<RecommendationRecord | null>(recommendationPath(item.id), null))
@@ -138,7 +143,8 @@ async function handleCreate(request: Request, env: Env, github: GitHubJsonClient
       ...recommendationValidation.value.profile,
       fileName
     },
-    evidenceFileName: evidence ? fileName : undefined
+    evidenceFileName: evidence ? fileName : undefined,
+    shotScore: shotScoreFromEvidence(evidence)
   };
 
   await github.writeJson(recommendationPath(id), recommendation, `Create recommendation ${id}`);
@@ -183,6 +189,7 @@ async function handleUpdate(request: Request, env: Env, github: GitHubJsonClient
   const evidence = evidenceFromBody(body);
   if (evidence instanceof Response) return evidence;
   const evidenceFileName = evidence ? fileName : existing.evidenceFileName;
+  const shotScore = evidence ? shotScoreFromEvidence(evidence) : existing.shotScore;
   const recommendation: RecommendationRecord = {
     ...recommendationValidation.value,
     id,
@@ -193,7 +200,8 @@ async function handleUpdate(request: Request, env: Env, github: GitHubJsonClient
       ...recommendationValidation.value.profile,
       fileName
     },
-    evidenceFileName
+    evidenceFileName,
+    shotScore
   };
 
   await github.writeJson(recommendationPath(id), recommendation, `Update recommendation ${id}`);

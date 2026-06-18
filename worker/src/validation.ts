@@ -209,7 +209,7 @@ export function validateProfileJson(profileJson: unknown): ValidationResult<unkn
   return { ok: true, value: profileJson };
 }
 
-export function buildSearchText(record: RecommendationInput): string {
+export function buildSearchText(record: RecommendationInput & { shotScore?: number }): string {
   return [
     record.submittedBy,
     record.bag.id,
@@ -241,7 +241,8 @@ export function buildSearchText(record: RecommendationInput): string {
     record.brew.secondsMax,
     record.brew.notes,
     record.visualizerUrl,
-    record.evidenceFileName
+    record.evidenceFileName,
+    record.shotScore
   ]
     .filter((value) => value !== undefined && value !== null && String(value).trim())
     .join(" ")
@@ -259,6 +260,7 @@ export function buildIndexItem(record: RecommendationRecord): RecommendationInde
     brew: { ...record.brew },
     visualizerUrl: record.visualizerUrl,
     evidenceFileName: record.evidenceFileName,
+    shotScore: record.shotScore,
     searchText: buildSearchText(record)
   };
 }
