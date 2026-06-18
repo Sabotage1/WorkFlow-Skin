@@ -1,0 +1,38 @@
+{
+  "submittedBy": "Roy",
+  "bag": {
+    "id": "161c15a4-e937-4894-99e0-9431b85d0bf3",
+    "beanId": "92ed87e8-6265-4fb6-b931-b532144f2d2e",
+    "roaster": "DAK",
+    "bean": "Chiroso - Washed",
+    "roastLevel": "Light",
+    "notes": "Colombia - Honeymoon"
+  },
+  "profile": {
+    "originalId": "profile:70e61d862c2f458b7307",
+    "originalTitle": "Kawa or Witch HUnt Turbo (no bloom) 2",
+    "fileName": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json",
+    "installedTitle": "Kawa or Witch HUnt Turbo (no bloom) 2"
+  },
+  "grinder": {
+    "id": "f111a2a2-cdce-4d5c-9c79-7e4256af8208",
+    "model": "Turin: DF83",
+    "burrs": "SSP MP",
+    "burrType": "flat",
+    "settingType": "numeric"
+  },
+  "brew": {
+    "grindSetting": "10",
+    "beansWeight": 18.5,
+    "drinkWeight": 34,
+    "notes": "Cherry",
+    "secondsMin": 11,
+    "secondsMax": 15
+  },
+  "id": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e",
+  "createdAt": "2026-06-18T19:39:31.424Z",
+  "updatedAt": "2026-06-18T19:39:31.424Z",
+  "ownerHash": "00c8ef0780afd015cead76ab49bad92f31a857932c483227cefcc9b41823f4da",
+  "evidenceFileName": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json",
+  "shotScore": 10
+}
