@@ -2,6 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "workflow-skin-community",
   "main": "src/index.ts",
+  "workers_dev": true,
+  "preview_urls": false,
   "compatibility_date": "2026-06-18",
   "compatibility_flags": ["nodejs_compat_v2"],
   "observability": {
