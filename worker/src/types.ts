@@ -19,9 +19,12 @@ export interface ProfileSnapshot {
   installedTitle: string;
 }
 
+export type BurrType = "flat" | "conical";
+
 export interface GrinderSnapshot {
   id: string;
   model: string;
+  burrType?: BurrType;
   burrs?: string;
   settingType?: "numeric" | "preset";
   notes?: string;
@@ -47,6 +50,8 @@ export interface ShotEvidence {
   ey?: number;
   enjoyment?: number;
   notes?: string;
+  grindSetting?: string;
+  grinderId?: string;
   measurements?: unknown[];
 }
 

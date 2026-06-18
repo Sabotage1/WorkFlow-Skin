@@ -1,5 +1,5 @@
 import type { GitHubJsonClient } from "./github";
-import type { BagSnapshot, BrewRecommendation, GrinderSnapshot, ProfileSnapshot, RecommendationIndex, RecommendationIndexItem, RecommendationRecord } from "./types";
+import type { BagSnapshot, BrewRecommendation, BurrType, GrinderSnapshot, ProfileSnapshot, RecommendationIndex, RecommendationIndexItem, RecommendationRecord } from "./types";
 import { buildIndexItem } from "./validation";
 
 const indexPath = "Profiles/index.json";
@@ -28,6 +28,11 @@ function pickString(record: Record<string, unknown>, field: string): string | un
 function pickNumber(record: Record<string, unknown>, field: string): number | undefined {
   const value = record[field];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function pickBurrType(record: Record<string, unknown>, field: string): BurrType | undefined {
+  const value = pickString(record, field)?.trim().toLowerCase();
+  return value === "flat" || value === "conical" ? value : undefined;
 }
 
 function sanitizeBag(input: unknown): BagSnapshot {
@@ -68,6 +73,8 @@ function sanitizeGrinder(input: unknown): GrinderSnapshot {
     id: pickString(record, "id") ?? "",
     model: pickString(record, "model") ?? ""
   };
+  const burrType = pickBurrType(record, "burrType");
+  if (burrType !== undefined) grinder.burrType = burrType;
   const burrs = pickString(record, "burrs");
   if (burrs !== undefined) grinder.burrs = burrs;
   const settingType = pickString(record, "settingType");

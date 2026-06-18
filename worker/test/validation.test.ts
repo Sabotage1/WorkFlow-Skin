@@ -27,6 +27,7 @@ const validInput: RecommendationInput = {
     id: "grinder-1",
     model: "ZP6",
     burrs: "MP",
+    burrType: "flat",
     settingType: "numeric",
     notes: "zero at chirp"
   },
@@ -82,6 +83,17 @@ describe("validateRecommendationInput", () => {
       brew: { ...validInput.brew, notes: "" }
     });
     expect(result).toEqual({ ok: false, error: "Missing required fields: bag.country, brew.notes." });
+  });
+
+  it("requires flat or conical grinder burrs type", () => {
+    expect(validateRecommendationInput({ ...validInput, grinder: { ...validInput.grinder, burrType: "" } })).toEqual({
+      ok: false,
+      error: "Missing required fields: grinder.burrType."
+    });
+    expect(validateRecommendationInput({ ...validInput, grinder: { ...validInput.grinder, burrType: "hybrid" } })).toEqual({
+      ok: false,
+      error: "Invalid field types: grinder.burrType."
+    });
   });
 
   it("rejects invalid visualizer URLs", () => {
@@ -178,6 +190,7 @@ describe("validateRecommendationInput", () => {
       },
       grinder: {
         ...validInput.grinder,
+        burrType: "  flat  ",
         notes: "  zero at chirp  ",
         extra: "drop me"
       },
@@ -218,6 +231,7 @@ describe("validateRecommendationInput", () => {
           id: "grinder-1",
           model: "ZP6",
           burrs: "MP",
+          burrType: "flat",
           settingType: "numeric",
           notes: "zero at chirp"
         },
@@ -266,6 +280,7 @@ describe("buildIndexItem", () => {
     expect(item.searchText).toContain("rec-1.json");
     expect(item.searchText).toContain("grinder-1");
     expect(item.searchText).toContain("zp6");
+    expect(item.searchText).toContain("flat");
     expect(item.searchText).toContain("4.2");
     expect(item.searchText).toContain("gentle declining pressure");
     expect(item.searchText).toContain("visualizer.coffee");

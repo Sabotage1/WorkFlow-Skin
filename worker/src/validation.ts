@@ -1,4 +1,4 @@
-import type { PublicRecommendationRecord, RecommendationIndexItem, RecommendationInput, RecommendationRecord, ValidationResult } from "./types";
+import type { BurrType, PublicRecommendationRecord, RecommendationIndexItem, RecommendationInput, RecommendationRecord, ValidationResult } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -51,6 +51,19 @@ function optionalString(record: UnknownRecord, field: string, invalid: string[],
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function requireBurrType(record: UnknownRecord, field: string, missing: string[], invalid: string[], path: string = field): BurrType | undefined {
+  const trimmed = cleanText(record[field]).toLowerCase();
+  if (!trimmed) {
+    missing.push(path);
+    return undefined;
+  }
+  if (trimmed !== "flat" && trimmed !== "conical") {
+    invalid.push(path);
+    return undefined;
+  }
+  return trimmed;
 }
 
 function requireNumber(record: UnknownRecord, field: string, missing: string[], path: string = field): number {
@@ -129,6 +142,8 @@ export function validateRecommendationInput(input: unknown): ValidationResult<Re
 
   const grinderBurrs = optionalString(grinder, "burrs", invalid, "grinder.burrs");
   if (grinderBurrs) normalized.grinder.burrs = grinderBurrs;
+  const grinderBurrType = requireBurrType(grinder, "burrType", missing, invalid, "grinder.burrType");
+  if (grinderBurrType) normalized.grinder.burrType = grinderBurrType;
   const grinderNotes = optionalString(grinder, "notes", invalid, "grinder.notes");
   if (grinderNotes) normalized.grinder.notes = grinderNotes;
   const settingType = grinder.settingType;
@@ -214,6 +229,7 @@ export function buildSearchText(record: RecommendationInput): string {
     record.profile.installedTitle,
     record.grinder.id,
     record.grinder.model,
+    record.grinder.burrType,
     record.grinder.burrs,
     record.grinder.settingType,
     record.grinder.notes,

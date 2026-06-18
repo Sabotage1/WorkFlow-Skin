@@ -33,6 +33,7 @@ const baseRecommendation: RecommendationInput = {
     id: "grinder-1",
     model: "ZP6",
     burrs: "MP",
+    burrType: "flat",
     settingType: "numeric",
     notes: "zero at chirp"
   },
