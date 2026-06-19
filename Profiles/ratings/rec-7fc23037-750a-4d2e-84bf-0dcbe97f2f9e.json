@@ -1,0 +1,12 @@
+{
+  "recommendationId": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e",
+  "updatedAt": "2026-06-19T17:36:35.453Z",
+  "ratings": {
+    "a5efa2a9b3f11360711de505086078898716776e3c9f3b3ec2c7fc1ffd913897": {
+      "rating": 5,
+      "updatedAt": "2026-06-19T17:36:35.453Z"
+    }
+  },
+  "average": 5,
+  "count": 1
+}
