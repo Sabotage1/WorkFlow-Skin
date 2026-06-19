@@ -1,7 +1,44 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-19T08:09:46.000Z",
+  "updatedAt": "2026-06-19T08:41:54.202Z",
   "items": [
+    {
+      "id": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4",
+      "updatedAt": "2026-06-19T08:41:54.202Z",
+      "submittedBy": "Ready Steady",
+      "bag": {
+        "id": "93a47617-3440-4bc5-9545-bd8be4bacc2e",
+        "beanId": "6aabb319-79aa-4aa9-a5fa-a1f706d2291c",
+        "roaster": "Stow",
+        "bean": "Tres Milagros",
+        "roastLevel": "medium",
+        "notes": "costa rica red bourbon classic honey"
+      },
+      "profile": {
+        "originalId": "profile:3b9426dba76d93a0a512",
+        "originalTitle": "Steady Flow",
+        "fileName": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json",
+        "installedTitle": "Steady Flow"
+      },
+      "grinder": {
+        "id": "da87be2c-bef8-4db3-9ac3-6a8b14cd4e7d",
+        "model": "064s",
+        "burrs": "SSP MP",
+        "burrType": "flat",
+        "settingType": "numeric"
+      },
+      "brew": {
+        "grindSetting": "0.9",
+        "beansWeight": 15.1,
+        "drinkWeight": 39.2,
+        "notes": "fast feed",
+        "secondsMin": 46,
+        "secondsMax": 46
+      },
+      "evidenceFileName": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json",
+      "shotScore": 9,
+      "searchText": "ready steady 93a47617-3440-4bc5-9545-bd8be4bacc2e 6aabb319-79aa-4aa9-a5fa-a1f706d2291c stow tres milagros medium costa rica red bourbon classic honey profile:3b9426dba76d93a0a512 steady flow rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json steady flow da87be2c-bef8-4db3-9ac3-6a8b14cd4e7d 064s flat ssp mp numeric 0.9 15.1 39.2 46 46 fast feed rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json 9"
+    },
     {
       "id": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e",
       "updatedAt": "2026-06-18T20:12:21.364Z",
