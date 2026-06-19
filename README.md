@@ -10,6 +10,24 @@ Latest release:
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
+## Install In ReaPrime
+
+WorkFlow Skin runs inside the ReaPrime app. It is not a standalone app.
+
+When installing from a GitHub release in ReaPrime, use:
+
+```text
+Sabotage1/WorkFlow-Skin
+```
+
+The release asset is:
+
+```text
+workflow-skin.zip
+```
+
+If an older install flow or saved entry requests `Sabotage1/WorkFlow`, a compatibility release exists there as well, but `Sabotage1/WorkFlow-Skin` is the canonical repository.
+
 ## What The Skin Adds
 
 WorkFlow Skin turns the machine screen into a complete espresso workflow surface rather than only a profile launcher.
