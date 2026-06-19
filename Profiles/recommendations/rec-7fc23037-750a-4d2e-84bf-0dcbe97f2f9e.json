@@ -34,5 +34,7 @@
   "updatedAt": "2026-06-18T20:12:21.364Z",
   "ownerHash": "00c8ef0780afd015cead76ab49bad92f31a857932c483227cefcc9b41823f4da",
   "evidenceFileName": "rec-7fc23037-750a-4d2e-84bf-0dcbe97f2f9e.json",
-  "shotScore": 10
+  "shotScore": 10,
+  "communityRatingAverage": 5,
+  "communityRatingCount": 1
 }
