@@ -1,0 +1,49 @@
+{
+  "version": "2",
+  "title": "Steady Flow",
+  "notes": "Testing fast soak, longer bloom and gentle ramp to either 6bar or 3.5mills\\n",
+  "author": "Decent",
+  "beverage_type": "espresso",
+  "steps": [
+    {
+      "name": "soak",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 6
+      },
+      "volume": 0,
+      "seconds": 30,
+      "weight": 1,
+      "temperature": 93,
+      "sensor": "water",
+      "flow": 5,
+      "limiter": {
+        "value": 7,
+        "range": 1
+      }
+    },
+    {
+      "name": "extract",
+      "pump": "flow",
+      "transition": "fast",
+      "exit": null,
+      "volume": 0,
+      "seconds": 127,
+      "weight": 0,
+      "temperature": 90,
+      "sensor": "water",
+      "flow": 2.5,
+      "limiter": {
+        "value": 6,
+        "range": 1
+      }
+    }
+  ],
+  "target_volume": 0,
+  "target_weight": 48,
+  "target_volume_count_start": 1,
+  "tank_temperature": 0
+}
