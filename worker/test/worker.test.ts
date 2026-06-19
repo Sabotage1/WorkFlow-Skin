@@ -87,6 +87,7 @@ function mockGithubContents(initialFiles: Record<string, unknown> = {}, options:
   const files = new Map<string, { value: unknown; sha: string }>();
   const reads: string[] = [];
   const writes: Array<{ path: string; value: unknown; message: string; sha?: string }> = [];
+  const deletes: Array<{ path: string; message: string; sha?: string }> = [];
   let indexWriteConflicts = options.indexWriteConflicts ?? 0;
   let indexReadCount = 0;
   let indexRaceApplied = false;
@@ -154,10 +155,25 @@ function mockGithubContents(initialFiles: Record<string, unknown> = {}, options:
       return Response.json({ content: { path, sha } });
     }
 
+    if (request.method === "DELETE") {
+      const path = decodeURIComponent(url.pathname.slice(contentsPrefix.length));
+      const existing = files.get(path);
+      if (!existing) {
+        return Response.json({ message: "Not Found" }, { status: 404 });
+      }
+      const body = JSON.parse(await request.text());
+      if (body.sha !== existing.sha) {
+        return Response.json({ message: "Conflict" }, { status: 409 });
+      }
+      deletes.push({ path, message: body.message, sha: body.sha });
+      files.delete(path);
+      return Response.json({ commit: { sha: `sha-${shaCounter}` } });
+    }
+
     return Response.json({ message: `Unhandled method: ${request.method}` }, { status: 500 });
   });
 
-  return { files, reads, writes };
+  return { files, reads, writes, deletes };
 }
 
 async function jsonFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -530,6 +546,72 @@ describe("community Worker API", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "forbidden" });
+  });
+
+  it("deletes owned recommendations, profile JSON, evidence JSON, and removes the index item", async () => {
+    const existing: RecommendationRecord = existingRecord("rec-existing", {
+      ownerHash: await hashOwnerKey("test-owner-secret:owner-key")
+    });
+    const survivor: RecommendationRecord = existingRecord("rec-survivor", {
+      submittedBy: "Mia",
+      ownerHash: await hashOwnerKey("test-owner-secret:survivor-owner")
+    });
+    const github = mockGithubContents({
+      "Profiles/index.json": {
+        version: 1,
+        updatedAt: "2026-06-18T12:00:00.000Z",
+        items: [buildIndexItem(existing), buildIndexItem(survivor)]
+      },
+      "Profiles/recommendations/rec-existing.json": existing,
+      "Profiles/profiles/rec-existing.json": profileJson,
+      "Profiles/evidence/rec-existing.json": evidence,
+      "Profiles/recommendations/rec-survivor.json": survivor
+    });
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing", testEnv(), {
+      method: "DELETE",
+      body: JSON.stringify({ ownerKey: "owner-key" }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    const body = await responseJson(response);
+    expect(body.id).toBe("rec-existing");
+    expect(github.deletes.map((item) => item.path)).toEqual([
+      "Profiles/recommendations/rec-existing.json",
+      "Profiles/profiles/rec-existing.json",
+      "Profiles/evidence/rec-existing.json"
+    ]);
+    expect(github.files.has("Profiles/recommendations/rec-existing.json")).toBe(false);
+    expect(github.files.has("Profiles/profiles/rec-existing.json")).toBe(false);
+    expect(github.files.has("Profiles/evidence/rec-existing.json")).toBe(false);
+    const finalIndex = github.files.get("Profiles/index.json")?.value as RecommendationIndex;
+    expect(finalIndex.items.map((item) => item.id)).toEqual(["rec-survivor"]);
+    expect((body.index as RecommendationIndex).items.map((item) => item.id)).toEqual(["rec-survivor"]);
+  });
+
+  it("rejects recommendation delete with the wrong owner key without deleting files", async () => {
+    const existing: RecommendationRecord = existingRecord("rec-existing", {
+      ownerHash: await hashOwnerKey("test-owner-secret:owner-key")
+    });
+    const github = mockGithubContents({
+      "Profiles/recommendations/rec-existing.json": existing,
+      "Profiles/profiles/rec-existing.json": profileJson,
+      "Profiles/evidence/rec-existing.json": evidence
+    });
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing", testEnv(), {
+      method: "DELETE",
+      body: JSON.stringify({ ownerKey: "wrong-owner-key" }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "forbidden" });
+    expect(github.deletes).toHaveLength(0);
+    expect(github.files.has("Profiles/recommendations/rec-existing.json")).toBe(true);
+    expect(github.files.has("Profiles/profiles/rec-existing.json")).toBe(true);
+    expect(github.files.has("Profiles/evidence/rec-existing.json")).toBe(true);
   });
 
   it("preserves existing evidence reference when update omits evidence", async () => {

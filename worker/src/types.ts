@@ -109,6 +109,10 @@ export interface UpdateRecommendationRequest {
   evidence?: ShotEvidence;
 }
 
+export interface DeleteRecommendationRequest {
+  ownerKey: string;
+}
+
 export interface DownloadPayload {
   recommendation: PublicRecommendationRecord;
   profileJson: unknown;

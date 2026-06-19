@@ -16,6 +16,7 @@ export interface GitHubJsonClient {
   readJsonWithSha<T>(path: string, fallback: T): Promise<{ value: T; sha?: string }>;
   writeJson(path: string, value: unknown, message: string): Promise<void>;
   writeJsonWithSha(path: string, value: unknown, message: string, expectedSha?: string): Promise<void>;
+  deleteJson(path: string, message: string): Promise<void>;
 }
 
 export class GitHubWriteConflictError extends Error {
@@ -35,6 +36,21 @@ function validateContentPath(path: string): void {
   if (path.includes("\\") || segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`Invalid GitHub content path: ${path}`);
   }
+  if (!isManagedCommunityContentPath(path)) {
+    throw new Error(`GitHub content path is outside managed community profile data: ${path}`);
+  }
+}
+
+export function isManagedCommunityContentPath(path: string): boolean {
+  const segments = path.split("/");
+  if (path.includes("\\") || segments.some((segment) => !segment || segment === "." || segment === "..")) return false;
+  return (
+    path === "Profiles/index.json" ||
+    path.startsWith("Profiles/recommendations/") ||
+    path.startsWith("Profiles/profiles/") ||
+    path.startsWith("Profiles/evidence/") ||
+    path.startsWith("Profiles/history/")
+  );
 }
 
 function encodeBase64(value: string): string {
@@ -119,6 +135,26 @@ export class GitHubContentsClient implements GitHubJsonClient {
       throw new GitHubWriteConflictError(path, response.status, `GitHub write conflict for ${path}.`);
     }
     if (!response.ok) throw await githubError(response, "write", path);
+  }
+
+  async deleteJson(path: string, message: string): Promise<void> {
+    const existing = await this.getContent(path);
+    if (!existing?.sha) return;
+
+    const response = await fetch(this.url(path), {
+      method: "DELETE",
+      headers: this.headers(),
+      body: JSON.stringify({
+        message,
+        branch: this.config.branch,
+        sha: existing.sha
+      })
+    });
+
+    if (response.status === 409 || response.status === 422) {
+      throw new GitHubWriteConflictError(path, response.status, `GitHub delete conflict for ${path}.`);
+    }
+    if (!response.ok) throw await githubError(response, "delete", path);
   }
 }
 

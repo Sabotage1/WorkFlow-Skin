@@ -2,7 +2,7 @@ import { GitHubWriteConflictError, githubFromEnv, type GitHubJsonClient } from "
 import { corsHeaders, errorResponse, JsonBodyError, jsonResponse, readJsonBody } from "./json";
 import { loadIndex, loadIndexWithSha, saveIndex } from "./indexer";
 import { hashOwnerKey, ownerHashesMatch } from "./owner";
-import type { CreateRecommendationRequest, RecommendationRecord, ShotEvidence, UpdateRecommendationRequest } from "./types";
+import type { CreateRecommendationRequest, DeleteRecommendationRequest, RecommendationRecord, ShotEvidence, UpdateRecommendationRequest } from "./types";
 import type { RecommendationIndex } from "./types";
 import { toPublicRecommendation, validateProfileJson, validateRecommendationInput } from "./validation";
 
@@ -108,6 +108,22 @@ async function saveIndexWithRetry(github: GitHubJsonClient, currentRecord: Recom
     const records = (await recordsFromIndex(github, loadedIndex.index)).filter((record) => record.id !== currentRecord.id);
     try {
       return await saveIndex(github, [...records, currentRecord], now, loadedIndex.sha);
+    } catch (error) {
+      if (!(error instanceof GitHubWriteConflictError) || error.path !== "Profiles/index.json" || attempt === maxAttempts) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Unable to save index.");
+}
+
+async function saveIndexAfterDeleteWithRetry(github: GitHubJsonClient, deletedId: string, now: string): Promise<Awaited<ReturnType<typeof saveIndex>>> {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const loadedIndex = await loadIndexWithSha(github);
+    const records = (await recordsFromIndex(github, loadedIndex.index)).filter((record) => record.id !== deletedId);
+    try {
+      return await saveIndex(github, records, now, loadedIndex.sha);
     } catch (error) {
       if (!(error instanceof GitHubWriteConflictError) || error.path !== "Profiles/index.json" || attempt === maxAttempts) {
         throw error;
@@ -239,6 +255,33 @@ async function handleDownload(id: string, github: GitHubJsonClient): Promise<Res
   return jsonResponse(payload);
 }
 
+async function handleDelete(request: Request, env: Env, github: GitHubJsonClient, id: string): Promise<Response> {
+  if (!validId(id)) return errorResponse("Invalid recommendation id.", 400);
+
+  const body = await readJsonBody<DeleteRecommendationRequest>(request, maxBodyBytes(env));
+  const ownerKey = requiredOwnerKey(body);
+  if (ownerKey instanceof Response) return ownerKey;
+
+  const existing = await github.readJson<RecommendationRecord | null>(recommendationPath(id), null);
+  if (!existing) return errorResponse("Recommendation not found.", 404);
+  if (!(await ownerProofMatches(env, existing.ownerHash, ownerKey))) {
+    return errorResponse("Owner key does not match this recommendation.", 403);
+  }
+  if (!safeJsonFileName(existing.profile.fileName) || (existing.evidenceFileName !== undefined && !safeJsonFileName(existing.evidenceFileName))) {
+    return errorResponse("Stored recommendation has an unsafe file name.", 500);
+  }
+
+  await github.deleteJson(recommendationPath(id), `Delete recommendation ${id}`);
+  await github.deleteJson(profilePath(existing.profile.fileName), `Delete profile ${id}`);
+  if (existing.evidenceFileName) {
+    await github.deleteJson(evidencePath(existing.evidenceFileName), `Delete evidence ${id}`);
+  }
+
+  // GitHub Contents deletes are not transactional; rebuilding from surviving records removes stale index entries.
+  const index = await saveIndexAfterDeleteWithRetry(github, id, new Date().toISOString());
+  return jsonResponse({ id, index });
+}
+
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders() });
@@ -263,6 +306,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
   if (recommendationMatch && request.method === "PUT") {
     return handleUpdate(request, env, github, recommendationMatch[1]);
+  }
+
+  if (recommendationMatch && request.method === "DELETE") {
+    return handleDelete(request, env, github, recommendationMatch[1]);
   }
 
   if (downloadMatch && request.method === "GET") {
