@@ -1,0 +1,38 @@
+{
+  "submittedBy": "Ready Steady",
+  "bag": {
+    "id": "93a47617-3440-4bc5-9545-bd8be4bacc2e",
+    "beanId": "6aabb319-79aa-4aa9-a5fa-a1f706d2291c",
+    "roaster": "Stow",
+    "bean": "Tres Milagros",
+    "roastLevel": "medium",
+    "notes": "costa rica red bourbon classic honey"
+  },
+  "profile": {
+    "originalId": "profile:3b9426dba76d93a0a512",
+    "originalTitle": "Steady Flow",
+    "fileName": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json",
+    "installedTitle": "Steady Flow"
+  },
+  "grinder": {
+    "id": "da87be2c-bef8-4db3-9ac3-6a8b14cd4e7d",
+    "model": "064s",
+    "burrs": "SSP MP",
+    "burrType": "flat",
+    "settingType": "numeric"
+  },
+  "brew": {
+    "grindSetting": "0.9",
+    "beansWeight": 15.1,
+    "drinkWeight": 39.2,
+    "notes": "fast feed",
+    "secondsMin": 46,
+    "secondsMax": 46
+  },
+  "id": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4",
+  "createdAt": "2026-06-19T08:41:54.202Z",
+  "updatedAt": "2026-06-19T08:41:54.202Z",
+  "ownerHash": "73c8b9bbedb17e7038ca9b61cdda27c594c8ec3bdb83cf02234bcf72cc73ca8c",
+  "evidenceFileName": "rec-a8e6efba-e9d8-4bf8-a9c0-8ef740b60ad4.json",
+  "shotScore": 9
+}
