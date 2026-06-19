@@ -578,6 +578,13 @@ describe("community Worker API", () => {
       "Profiles/recommendations/rec-existing.json": existing,
       "Profiles/profiles/rec-existing.json": profileJson,
       "Profiles/evidence/rec-existing.json": evidence,
+      "Profiles/ratings/rec-existing.json": {
+        recommendationId: "rec-existing",
+        updatedAt: "2026-06-18T12:05:00.000Z",
+        ratings: { stored: { rating: 4, updatedAt: "2026-06-18T12:05:00.000Z" } },
+        average: 4,
+        count: 1
+      },
       "Profiles/recommendations/rec-survivor.json": survivor
     });
 
@@ -593,11 +600,13 @@ describe("community Worker API", () => {
     expect(github.deletes.map((item) => item.path)).toEqual([
       "Profiles/recommendations/rec-existing.json",
       "Profiles/profiles/rec-existing.json",
-      "Profiles/evidence/rec-existing.json"
+      "Profiles/evidence/rec-existing.json",
+      "Profiles/ratings/rec-existing.json"
     ]);
     expect(github.files.has("Profiles/recommendations/rec-existing.json")).toBe(false);
     expect(github.files.has("Profiles/profiles/rec-existing.json")).toBe(false);
     expect(github.files.has("Profiles/evidence/rec-existing.json")).toBe(false);
+    expect(github.files.has("Profiles/ratings/rec-existing.json")).toBe(false);
     const finalIndex = github.files.get("Profiles/index.json")?.value as RecommendationIndex;
     expect(finalIndex.items.map((item) => item.id)).toEqual(["rec-survivor"]);
     expect((body.index as RecommendationIndex).items.map((item) => item.id)).toEqual(["rec-survivor"]);
@@ -679,6 +688,114 @@ describe("community Worker API", () => {
     expect(body.evidence).toEqual(evidence);
     expect(body.recommendation).toMatchObject({ id: "rec-existing" });
     expect("ownerHash" in (body.recommendation as Record<string, unknown>)).toBe(false);
+  });
+
+  it("stores community profile ranks without exposing owner keys and rebuilds the public aggregate", async () => {
+    const existing = existingRecord("rec-existing", {
+      ownerHash: await hashOwnerKey("test-owner-secret:owner-key")
+    });
+    const github = mockGithubContents({
+      "Profiles/index.json": {
+        version: 1,
+        updatedAt: "2026-06-18T12:00:00.000Z",
+        items: [buildIndexItem(existing)]
+      },
+      "Profiles/recommendations/rec-existing.json": existing
+    });
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing/rating", testEnv(), {
+      method: "POST",
+      body: JSON.stringify({ ownerKey: "rater-key", rating: 4 }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    const body = await responseJson(response);
+    expect(body.rating).toBe(4);
+    expect(body.recommendation).toMatchObject({
+      id: "rec-existing",
+      communityRatingAverage: 4,
+      communityRatingCount: 1
+    });
+    expect(JSON.stringify(body)).not.toContain("ownerHash");
+    expect(JSON.stringify(body)).not.toContain("rater-key");
+    expect(github.writes.map((write) => write.path)).toEqual([
+      "Profiles/ratings/rec-existing.json",
+      "Profiles/recommendations/rec-existing.json",
+      "Profiles/index.json"
+    ]);
+    const ratingRecord = github.files.get("Profiles/ratings/rec-existing.json")?.value as Record<string, unknown>;
+    expect(ratingRecord).toMatchObject({
+      recommendationId: "rec-existing",
+      average: 4,
+      count: 1
+    });
+    expect(JSON.stringify(ratingRecord)).not.toContain("rater-key");
+    const finalIndex = github.files.get("Profiles/index.json")?.value as RecommendationIndex;
+    expect(finalIndex.items[0]).toMatchObject({
+      id: "rec-existing",
+      communityRatingAverage: 4,
+      communityRatingCount: 1
+    });
+  });
+
+  it("updates an existing community rank from the same machine instead of duplicating it", async () => {
+    const existing = existingRecord("rec-existing", {
+      communityRatingAverage: 3,
+      communityRatingCount: 2,
+      ownerHash: await hashOwnerKey("test-owner-secret:owner-key")
+    });
+    const raterHash = await hashOwnerKey("test-owner-secret:rec-existing:rater-key");
+    const github = mockGithubContents({
+      "Profiles/index.json": {
+        version: 1,
+        updatedAt: "2026-06-18T12:00:00.000Z",
+        items: [buildIndexItem(existing)]
+      },
+      "Profiles/recommendations/rec-existing.json": existing,
+      "Profiles/ratings/rec-existing.json": {
+        recommendationId: "rec-existing",
+        updatedAt: "2026-06-18T12:05:00.000Z",
+        ratings: {
+          [raterHash]: { rating: 2, updatedAt: "2026-06-18T12:05:00.000Z" },
+          other: { rating: 4, updatedAt: "2026-06-18T12:06:00.000Z" }
+        },
+        average: 3,
+        count: 2
+      }
+    });
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing/rating", testEnv(), {
+      method: "POST",
+      body: JSON.stringify({ ownerKey: "rater-key", rating: 5 }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    const body = await responseJson(response);
+    expect(body.recommendation).toMatchObject({
+      communityRatingAverage: 4.5,
+      communityRatingCount: 2
+    });
+    const ratingRecord = github.files.get("Profiles/ratings/rec-existing.json")?.value as Record<string, { rating?: number }>;
+    expect(Object.keys(ratingRecord.ratings as Record<string, unknown>)).toHaveLength(2);
+    expect((ratingRecord.ratings as Record<string, { rating: number }>)[raterHash].rating).toBe(5);
+  });
+
+  it("rejects invalid community ranks before writing any GitHub files", async () => {
+    const github = mockGithubContents({
+      "Profiles/recommendations/rec-existing.json": existingRecord("rec-existing")
+    });
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing/rating", testEnv(), {
+      method: "POST",
+      body: JSON.stringify({ ownerKey: "rater-key", rating: 6 }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "bad_request" });
+    expect(github.writes).toHaveLength(0);
   });
 
   it("downloads profile and evidence from stored safe legacy filenames", async () => {

@@ -265,7 +265,9 @@ export function buildSearchText(record: RecommendationInput & { shotScore?: numb
     record.rating,
     record.visualizerUrl,
     record.evidenceFileName,
-    record.shotScore
+    record.shotScore,
+    record.communityRatingAverage,
+    record.communityRatingCount
   ]
     .filter((value) => value !== undefined && value !== null && String(value).trim())
     .join(" ")
@@ -285,6 +287,8 @@ export function buildIndexItem(record: RecommendationRecord): RecommendationInde
     visualizerUrl: record.visualizerUrl,
     evidenceFileName: record.evidenceFileName,
     shotScore: record.shotScore,
+    communityRatingAverage: record.communityRatingAverage,
+    communityRatingCount: record.communityRatingCount,
     searchText: buildSearchText(record)
   };
 }

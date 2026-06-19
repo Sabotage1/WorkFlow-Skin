@@ -127,6 +127,10 @@ function sanitizeIndexItem(input: unknown): RecommendationIndexItem | undefined 
   if (rating !== undefined && Number.isInteger(rating) && rating >= 1 && rating <= 5) item.rating = rating;
   const shotScore = pickNumber(input, "shotScore");
   if (shotScore !== undefined) item.shotScore = shotScore;
+  const communityRatingAverage = pickNumber(input, "communityRatingAverage");
+  const communityRatingCount = pickNumber(input, "communityRatingCount");
+  if (communityRatingAverage !== undefined && communityRatingAverage >= 1 && communityRatingAverage <= 5) item.communityRatingAverage = communityRatingAverage;
+  if (communityRatingCount !== undefined && Number.isInteger(communityRatingCount) && communityRatingCount > 0) item.communityRatingCount = communityRatingCount;
   return item;
 }
 

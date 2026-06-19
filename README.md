@@ -6,7 +6,7 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.2.3](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.3)
+- [WorkFlow Skin v0.2.4](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.4)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
@@ -46,7 +46,7 @@ WorkFlow Skin turns the machine screen into a complete espresso workflow surface
 | Grinders | Saved grinder records with model, setting type, burrs, and mandatory Burrs Type: Flat or Conical. |
 | Profiles | Profile visibility, startup profile, workflow settings, and preset assignment. |
 | History | Searchable shot history with bag/profile/grinder context and quick sharing to Community. |
-| Community | Search, download, upload, edit, and delete community profile recommendations. |
+| Community | Search, download, rank, upload, edit, and delete community profile recommendations. |
 | Settings | Menu layout, top indicators, themes, preset count, R2 setup, screensaver, wake/auto-sleep, and machine settings. |
 
 ## Core Features
@@ -151,12 +151,13 @@ The Community page lets users share and download working profile recommendations
 
 ### Browsing And Search
 
-Community recommendations are searchable across the recommendation fields, including bag details, profile name, grinder model, burrs, burr type, brew recipe, notes, submitter name, shot score, and recommendation rating.
+Community recommendations are searchable across the recommendation fields, including bag details, profile name, grinder model, burrs, burr type, brew recipe, notes, submitter name, shot score, uploader rating, and community rank.
 
 The list shows quick reference details such as:
 
 - Profile title
 - 1-5 star recommendation rating
+- Community rank from people who tried or inspected the profile
 - Bag and roaster
 - Grinder model and burrs
 - Flat or Conical burr type
@@ -166,9 +167,9 @@ The list shows quick reference details such as:
 - Submitter display name
 - Upload date
 
-Users can also filter recommendations by minimum star rating.
+Users can also filter recommendations by minimum stars. Ranked recommendations use the community rank first, and unrated recommendations fall back to the uploader's own recommendation rating.
 
-Opening a recommendation shows full details, optional shot evidence, and a download action.
+Opening a recommendation shows full details, optional shot evidence, a community rank control, and a download action.
 
 ### Downloading Profiles
 
@@ -300,7 +301,10 @@ The Worker serves the skin-facing API:
 | `GET` | `/api/recommendations/:id` | Return one public recommendation. |
 | `PUT` | `/api/recommendations/:id` | Update an owned recommendation. |
 | `DELETE` | `/api/recommendations/:id` | Delete an owned recommendation and its profile/evidence files. |
+| `POST` | `/api/recommendations/:id/rating` | Save or update this machine's 1-5 community rank and rebuild the public rank aggregate. |
 | `GET` | `/api/download/:id` | Return recommendation metadata plus profile JSON and optional evidence. |
+
+Managed GitHub writes are restricted to `Profiles/index.json`, `Profiles/recommendations/`, `Profiles/profiles/`, `Profiles/evidence/`, `Profiles/history/`, and `Profiles/ratings/`. Skin files, release assets, workflows, and repository metadata remain outside the Worker allowlist.
 
 ## Development
 
@@ -321,6 +325,7 @@ The Worker test suite covers:
 - Download payloads.
 - Owner-key protected edits.
 - Owner-key protected deletes.
+- Community rank aggregation.
 - Index rebuilding.
 - Validation of required recommendation fields.
 - Safe filename handling.
@@ -345,4 +350,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.2.3 includes community uploads, downloads, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, recommendation star ratings and rating filters, burr type filtering, grinder search, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.2.4 includes community uploads, downloads, downloader profile ranks, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, recommendation star ratings and rating filters, burr type filtering, grinder search, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.

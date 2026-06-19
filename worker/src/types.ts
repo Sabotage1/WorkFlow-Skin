@@ -72,6 +72,8 @@ export interface RecommendationRecord extends RecommendationInput {
   updatedAt: string;
   ownerHash: string;
   shotScore?: number;
+  communityRatingAverage?: number;
+  communityRatingCount?: number;
 }
 
 export type PublicRecommendationRecord = Omit<RecommendationRecord, "ownerHash">;
@@ -88,6 +90,8 @@ export interface RecommendationIndexItem {
   visualizerUrl?: string;
   evidenceFileName?: string;
   shotScore?: number;
+  communityRatingAverage?: number;
+  communityRatingCount?: number;
   searchText: string;
 }
 
@@ -113,6 +117,19 @@ export interface UpdateRecommendationRequest {
 
 export interface DeleteRecommendationRequest {
   ownerKey: string;
+}
+
+export interface RateRecommendationRequest {
+  ownerKey: string;
+  rating: number;
+}
+
+export interface RecommendationRatingRecord {
+  recommendationId: string;
+  updatedAt: string;
+  ratings: Record<string, { rating: number; updatedAt: string }>;
+  average: number;
+  count: number;
 }
 
 export interface DownloadPayload {

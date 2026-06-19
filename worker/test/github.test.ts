@@ -8,6 +8,7 @@ describe("GitHub managed content path allowlist", () => {
     expect(isManagedCommunityContentPath("Profiles/profiles/rec-1.json")).toBe(true);
     expect(isManagedCommunityContentPath("Profiles/evidence/rec-1.json")).toBe(true);
     expect(isManagedCommunityContentPath("Profiles/history/shot-1.json")).toBe(true);
+    expect(isManagedCommunityContentPath("Profiles/ratings/rec-1.json")).toBe(true);
   });
 
   it("blocks skin, release, workflow, and repository metadata paths", () => {

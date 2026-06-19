@@ -49,7 +49,8 @@ export function isManagedCommunityContentPath(path: string): boolean {
     path.startsWith("Profiles/recommendations/") ||
     path.startsWith("Profiles/profiles/") ||
     path.startsWith("Profiles/evidence/") ||
-    path.startsWith("Profiles/history/")
+    path.startsWith("Profiles/history/") ||
+    path.startsWith("Profiles/ratings/")
   );
 }
 

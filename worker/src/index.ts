@@ -2,13 +2,14 @@ import { GitHubWriteConflictError, githubFromEnv, type GitHubJsonClient } from "
 import { corsHeaders, errorResponse, JsonBodyError, jsonResponse, readJsonBody } from "./json";
 import { loadIndex, loadIndexWithSha, saveIndex } from "./indexer";
 import { hashOwnerKey, ownerHashesMatch } from "./owner";
-import type { CreateRecommendationRequest, DeleteRecommendationRequest, RecommendationRecord, ShotEvidence, UpdateRecommendationRequest } from "./types";
+import type { CreateRecommendationRequest, DeleteRecommendationRequest, RateRecommendationRequest, RecommendationRatingRecord, RecommendationRecord, ShotEvidence, UpdateRecommendationRequest } from "./types";
 import type { RecommendationIndex } from "./types";
 import { toPublicRecommendation, validateProfileJson, validateRecommendationInput } from "./validation";
 
 const recommendationDirectory = "Profiles/recommendations";
 const profileDirectory = "Profiles/profiles";
 const evidenceDirectory = "Profiles/evidence";
+const ratingDirectory = "Profiles/ratings";
 const idPattern = /^rec-[a-z0-9-]+$/;
 const safeJsonFileNamePattern = /^(?!.*\.\.)[A-Za-z0-9._-]{1,120}\.json$/;
 
@@ -43,6 +44,10 @@ function profilePath(fileName: string): string {
 
 function evidencePath(fileName: string): string {
   return `${evidenceDirectory}/${fileName}`;
+}
+
+function ratingPath(id: string): string {
+  return `${ratingDirectory}/${id}.json`;
 }
 
 function validId(id: string): boolean {
@@ -87,6 +92,43 @@ function evidenceFromBody(body: unknown): ShotEvidence | undefined | Response {
     return errorResponse("Evidence id is required.", 400);
   }
   return body.evidence as unknown as ShotEvidence;
+}
+
+function rankFromBody(body: unknown): number | Response {
+  if (!isRecord(body) || typeof body.rating !== "number" || !Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
+    return errorResponse("Rating must be an integer from 1 to 5.", 400);
+  }
+  return body.rating;
+}
+
+function sanitizeRatingRecord(input: unknown, recommendationId: string): RecommendationRatingRecord {
+  const record = isRecord(input) ? input : {};
+  const ratingsInput = isRecord(record.ratings) ? record.ratings : {};
+  const ratings: RecommendationRatingRecord["ratings"] = {};
+  for (const [ownerHash, value] of Object.entries(ratingsInput)) {
+    if (!isRecord(value)) continue;
+    const rating = value.rating;
+    const updatedAt = value.updatedAt;
+    if (typeof ownerHash !== "string" || !ownerHash || typeof rating !== "number" || !Number.isInteger(rating) || rating < 1 || rating > 5 || typeof updatedAt !== "string") {
+      continue;
+    }
+    ratings[ownerHash] = { rating, updatedAt };
+  }
+  const aggregate = aggregateRatings(ratings);
+  return {
+    recommendationId,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "1970-01-01T00:00:00.000Z",
+    ratings,
+    average: aggregate.average,
+    count: aggregate.count
+  };
+}
+
+function aggregateRatings(ratings: RecommendationRatingRecord["ratings"]): { average: number; count: number } {
+  const values = Object.values(ratings).map((entry) => entry.rating).filter((rating) => Number.isInteger(rating) && rating >= 1 && rating <= 5);
+  if (values.length === 0) return { average: 0, count: 0 };
+  const average = Math.round((values.reduce((sum, rating) => sum + rating, 0) / values.length) * 10) / 10;
+  return { average, count: values.length };
 }
 
 function shotScoreFromEvidence(evidence: ShotEvidence | undefined): number | undefined {
@@ -255,6 +297,45 @@ async function handleDownload(id: string, github: GitHubJsonClient): Promise<Res
   return jsonResponse(payload);
 }
 
+async function handleRate(request: Request, env: Env, github: GitHubJsonClient, id: string): Promise<Response> {
+  if (!validId(id)) return errorResponse("Invalid recommendation id.", 400);
+
+  const body = await readJsonBody<RateRecommendationRequest>(request, maxBodyBytes(env));
+  const ownerKey = requiredOwnerKey(body);
+  if (ownerKey instanceof Response) return ownerKey;
+  const rating = rankFromBody(body);
+  if (rating instanceof Response) return rating;
+
+  const existing = await github.readJson<RecommendationRecord | null>(recommendationPath(id), null);
+  if (!existing) return errorResponse("Recommendation not found.", 404);
+
+  const ownerHash = await ownerProof(env, `${id}:${ownerKey}`);
+  const now = new Date().toISOString();
+  const currentRatings = sanitizeRatingRecord(await github.readJson<unknown | null>(ratingPath(id), null), id);
+  const ratings: RecommendationRatingRecord["ratings"] = {
+    ...currentRatings.ratings,
+    [ownerHash]: { rating, updatedAt: now }
+  };
+  const aggregate = aggregateRatings(ratings);
+  const ratingRecord: RecommendationRatingRecord = {
+    recommendationId: id,
+    updatedAt: now,
+    ratings,
+    average: aggregate.average,
+    count: aggregate.count
+  };
+  const recommendation: RecommendationRecord = {
+    ...existing,
+    communityRatingAverage: aggregate.average,
+    communityRatingCount: aggregate.count
+  };
+
+  await github.writeJson(ratingPath(id), ratingRecord, `Rate recommendation ${id}`);
+  await github.writeJson(recommendationPath(id), recommendation, `Update recommendation rank ${id}`);
+  const index = await saveIndexWithRetry(github, recommendation, now);
+  return jsonResponse({ rating, recommendation: toPublicRecommendation(recommendation), index });
+}
+
 async function handleDelete(request: Request, env: Env, github: GitHubJsonClient, id: string): Promise<Response> {
   if (!validId(id)) return errorResponse("Invalid recommendation id.", 400);
 
@@ -276,6 +357,10 @@ async function handleDelete(request: Request, env: Env, github: GitHubJsonClient
   if (existing.evidenceFileName) {
     await github.deleteJson(evidencePath(existing.evidenceFileName), `Delete evidence ${id}`);
   }
+  const ratingRecord = await github.readJson<RecommendationRatingRecord | null>(ratingPath(id), null);
+  if (ratingRecord) {
+    await github.deleteJson(ratingPath(id), `Delete recommendation ratings ${id}`);
+  }
 
   // GitHub Contents deletes are not transactional; rebuilding from surviving records removes stale index entries.
   const index = await saveIndexAfterDeleteWithRetry(github, id, new Date().toISOString());
@@ -290,6 +375,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const github = githubFromEnv(env);
   const recommendationMatch = url.pathname.match(/^\/api\/recommendations\/([^/]+)$/);
+  const ratingMatch = url.pathname.match(/^\/api\/recommendations\/([^/]+)\/rating$/);
   const downloadMatch = url.pathname.match(/^\/api\/download\/([^/]+)$/);
 
   if (url.pathname === "/api/recommendations" && request.method === "GET") {
@@ -310,6 +396,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
   if (recommendationMatch && request.method === "DELETE") {
     return handleDelete(request, env, github, recommendationMatch[1]);
+  }
+
+  if (ratingMatch && request.method === "POST") {
+    return handleRate(request, env, github, ratingMatch[1]);
   }
 
   if (downloadMatch && request.method === "GET") {
