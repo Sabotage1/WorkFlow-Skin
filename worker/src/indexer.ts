@@ -123,6 +123,8 @@ function sanitizeIndexItem(input: unknown): RecommendationIndexItem | undefined 
   if (visualizerUrl !== undefined) item.visualizerUrl = visualizerUrl;
   const evidenceFileName = pickString(input, "evidenceFileName");
   if (evidenceFileName !== undefined) item.evidenceFileName = evidenceFileName;
+  const rating = pickNumber(input, "rating");
+  if (rating !== undefined && Number.isInteger(rating) && rating >= 1 && rating <= 5) item.rating = rating;
   const shotScore = pickNumber(input, "shotScore");
   if (shotScore !== undefined) item.shotScore = shotScore;
   return item;

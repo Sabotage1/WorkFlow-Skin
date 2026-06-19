@@ -91,6 +91,16 @@ function optionalNumber(record: UnknownRecord, field: string, invalid: string[],
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function optionalStarRating(record: UnknownRecord, field: string, invalid: string[], path: string = field): number | undefined {
+  const value = record[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 5) {
+    invalid.push(path);
+    return undefined;
+  }
+  return value;
+}
+
 export function validateRecommendationInput(input: unknown): ValidationResult<RecommendationInput> {
   if (!isRecord(input)) {
     return { ok: false, error: "Recommendation must be an object." };
@@ -181,6 +191,8 @@ export function validateRecommendationInput(input: unknown): ValidationResult<Re
   if (visualizerUrl) normalized.visualizerUrl = visualizerUrl;
   const evidenceFileName = optionalString(input, "evidenceFileName", invalid);
   if (evidenceFileName) normalized.evidenceFileName = evidenceFileName;
+  const rating = optionalStarRating(input, "rating", invalid);
+  if (rating !== undefined) normalized.rating = rating;
 
   if (missing.length > 0) {
     return { ok: false, error: `Missing required fields: ${missing.join(", ")}.` };
@@ -250,6 +262,7 @@ export function buildSearchText(record: RecommendationInput & { shotScore?: numb
     record.brew.secondsMin,
     record.brew.secondsMax,
     record.brew.notes,
+    record.rating,
     record.visualizerUrl,
     record.evidenceFileName,
     record.shotScore
@@ -268,6 +281,7 @@ export function buildIndexItem(record: RecommendationRecord): RecommendationInde
     profile: { ...record.profile },
     grinder: { ...record.grinder },
     brew: { ...record.brew },
+    rating: record.rating,
     visualizerUrl: record.visualizerUrl,
     evidenceFileName: record.evidenceFileName,
     shotScore: record.shotScore,

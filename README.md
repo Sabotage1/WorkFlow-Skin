@@ -6,9 +6,15 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.2.1](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.1)
+- [WorkFlow Skin v0.2.2](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.2)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
+
+## Screenshots
+
+| Brew | Review | Community |
+| --- | --- | --- |
+| ![WorkFlow Brew page with profile presets and current bag](assets/screenshots/workflow-brew.png) | ![WorkFlow Review page with shot graph and extraction details](assets/screenshots/workflow-review.png) | ![WorkFlow Community page with profile recommendations](assets/screenshots/workflow-community.png) |
 
 ## Install In ReaPrime
 
@@ -47,7 +53,7 @@ WorkFlow Skin turns the machine screen into a complete espresso workflow surface
 
 ### Profile Presets
 
-The main brew screen can show configurable preset cards such as Light, Sweet, Turbo, and Classic. Users can choose how many preset cards appear, rename each preset, and assign visible profiles from the Profiles page.
+The main brew screen can show up to eight configurable preset cards in two rows of four. Users can choose how many preset cards appear, rename each preset, and assign visible profiles from the Profiles page.
 
 The Profiles page lets users:
 
@@ -145,11 +151,12 @@ The Community page lets users share and download working profile recommendations
 
 ### Browsing And Search
 
-Community recommendations are searchable across the recommendation fields, including bag details, profile name, grinder model, burrs, burr type, brew recipe, notes, submitter name, and shot score.
+Community recommendations are searchable across the recommendation fields, including bag details, profile name, grinder model, burrs, burr type, brew recipe, notes, submitter name, shot score, and recommendation rating.
 
 The list shows quick reference details such as:
 
 - Profile title
+- 1-5 star recommendation rating
 - Bag and roaster
 - Grinder model and burrs
 - Flat or Conical burr type
@@ -158,6 +165,8 @@ The list shows quick reference details such as:
 - Shot score
 - Submitter display name
 - Upload date
+
+Users can also filter recommendations by minimum star rating.
 
 Opening a recommendation shows full details, optional shot evidence, and a download action.
 
@@ -193,6 +202,7 @@ Required fields for upload:
 - Drink weight
 - Seconds goal or seconds range
 - Notes
+- Recommendation rating from 1 to 5 stars
 - Public display name when no safe Decent profile username is available
 
 Optional but highly recommended:
@@ -335,4 +345,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.2.1 includes community uploads, downloads, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, burr type filtering, grinder search, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.2.2 includes community uploads, downloads, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, recommendation star ratings and rating filters, burr type filtering, grinder search, up to eight brew-page presets, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.

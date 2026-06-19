@@ -45,6 +45,7 @@ const baseRecommendation: RecommendationInput = {
     secondsMax: 34,
     notes: "Gentle declining pressure after bloom"
   },
+  rating: 5,
   visualizerUrl: "https://visualizer.coffee/shots/abc",
   evidenceFileName: "submitted-evidence.json"
 };

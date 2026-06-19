@@ -48,6 +48,13 @@ describe("validateRecommendationInput", () => {
     expect(validateRecommendationInput(validInput)).toEqual({ ok: true, value: validInput });
   });
 
+  it("accepts recommendation ratings from one to five stars and rejects invalid ratings", () => {
+    expect(validateRecommendationInput({ ...validInput, rating: 4 })).toEqual({ ok: true, value: { ...validInput, rating: 4 } });
+    expect(validateRecommendationInput({ ...validInput, rating: 0 })).toEqual({ ok: false, error: "Invalid field types: rating." });
+    expect(validateRecommendationInput({ ...validInput, rating: 6 })).toEqual({ ok: false, error: "Invalid field types: rating." });
+    expect(validateRecommendationInput({ ...validInput, rating: "5" })).toEqual({ ok: false, error: "Invalid field types: rating." });
+  });
+
   it("rejects email-only submittedBy", () => {
     const result = validateRecommendationInput({ ...validInput, submittedBy: "person@example.com" });
     expect(result).toEqual({ ok: false, error: "Public display name is required; email addresses are not allowed." });
@@ -304,6 +311,7 @@ describe("buildIndexItem", () => {
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
       ownerHash: "hash",
+      rating: 5,
       shotScore: 8,
       ...validInput
     });
@@ -318,7 +326,9 @@ describe("buildIndexItem", () => {
     expect(item.searchText).toContain("4.2");
     expect(item.searchText).toContain("gentle declining pressure");
     expect(item.searchText).toContain("8");
+    expect(item.searchText).toContain("5");
     expect(item.searchText).toContain("visualizer.coffee");
+    expect(item.rating).toBe(5);
     expect(item.shotScore).toBe(8);
     expect(item.bag).toEqual(validInput.bag);
     expect(item.bag).not.toBe(validInput.bag);
@@ -338,6 +348,7 @@ describe("toPublicRecommendation", () => {
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
       ownerHash: "secret-hash",
+      rating: 5,
       shotScore: 8,
       ...validInput
     });
@@ -346,6 +357,7 @@ describe("toPublicRecommendation", () => {
       id: "rec-1",
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z",
+      rating: 5,
       shotScore: 8,
       ...validInput
     });

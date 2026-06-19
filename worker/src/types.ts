@@ -61,6 +61,7 @@ export interface RecommendationInput {
   profile: ProfileSnapshot;
   grinder: GrinderSnapshot;
   brew: BrewRecommendation;
+  rating?: number;
   visualizerUrl?: string;
   evidenceFileName?: string;
 }
@@ -83,6 +84,7 @@ export interface RecommendationIndexItem {
   profile: ProfileSnapshot;
   grinder: GrinderSnapshot;
   brew: BrewRecommendation;
+  rating?: number;
   visualizerUrl?: string;
   evidenceFileName?: string;
   shotScore?: number;
