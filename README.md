@@ -6,7 +6,7 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.2.4](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.4)
+- [WorkFlow Skin v0.2.5](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.5)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
@@ -269,7 +269,7 @@ https://workflow-skin-community.sabotage1.workers.dev
 
 The community system is intentionally narrow.
 
-- The Worker can only write community profile data under `Profiles/index.json`, `Profiles/recommendations/`, `Profiles/profiles/`, `Profiles/evidence/`, and `Profiles/history/`.
+- The Worker can only write community profile data under `Profiles/index.json`, `Profiles/recommendations/`, `Profiles/profiles/`, `Profiles/evidence/`, `Profiles/history/`, and `Profiles/ratings/`.
 - The Worker cannot edit the skin bundle, release assets, `.github/`, README files, or other repository content.
 - GitHub token and owner-key secrets live in Cloudflare Worker secrets, not in the open-source skin.
 - Public recommendations do not expose owner keys.
@@ -350,4 +350,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.2.4 includes community uploads, downloads, downloader profile ranks, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, recommendation star ratings and rating filters, burr type filtering, grinder search, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.2.5 includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.
