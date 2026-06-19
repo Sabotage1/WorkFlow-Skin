@@ -6,7 +6,7 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.2.0](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.0)
+- [WorkFlow Skin v0.2.1](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.2.1)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
@@ -335,4 +335,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.2.0 includes community uploads, downloads, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, burr type filtering, grinder search, R2 review support, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.2.1 includes community uploads, downloads, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, burr type filtering, grinder search, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.

@@ -255,6 +255,18 @@ describe("community Worker API", () => {
     expect(response.headers.get("access-control-allow-origin")).toBe("https://skin.example");
   });
 
+  it("allows browser preflight for uploaded recommendation deletes", async () => {
+    mockGithubContents();
+
+    const response = await directWorkerFetch("/api/recommendations/rec-existing", testEnv(), {
+      method: "OPTIONS",
+      headers: { origin: "http://localhost:8080", "access-control-request-method": "DELETE" }
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-methods")).toContain("DELETE");
+  });
+
   it("sanitizes persisted index JSON before returning it publicly", async () => {
     mockGithubContents({
       "Profiles/index.json": {
