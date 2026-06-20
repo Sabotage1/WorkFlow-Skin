@@ -1,0 +1,7 @@
+{
+  "id": "workflow-skin",
+  "name": "WorkFlow",
+  "description": "Profile presets, bag history, recommendations, post-shot review, TDS/EY, and Visualizer workflow for ReaPrime.",
+  "version": "0.2.7",
+  "creator": "Roy Ackerman"
+}

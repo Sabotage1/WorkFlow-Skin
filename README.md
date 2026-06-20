@@ -284,6 +284,11 @@ Profiles/
   profiles/               Uploaded ReaPrime profile JSON files.
   evidence/               Optional shot-history evidence JSON.
 
+skin/workflow-skin/
+  src/                     ReaPrime WorkFlow Skin source.
+  public/                  Bundled skin assets.
+  scripts/                 Skin package script for workflow-skin.zip.
+
 worker/
   src/                    Cloudflare Worker API source.
   test/                   Worker validation, API, ownership, and path-safety tests.
@@ -350,4 +355,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.2.7 includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.2.7 includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
