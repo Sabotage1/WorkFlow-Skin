@@ -126,6 +126,7 @@ function mockReaFetch(
   let scanCount = 0;
   let connectCount = 0;
   let sensorExecuteCount = 0;
+  let scaleTareCount = 0;
   const communityDownloadIds: string[] = [];
   const communityCreatePayloads: unknown[] = [];
   const communityUpdatePayloads: unknown[] = [];
@@ -332,6 +333,10 @@ function mockReaFetch(
       const shot = options.shotDetailsById?.[shotId] ?? shots.find((item) => item.id === shotId);
       return shot ? responseJson(shot) : Promise.resolve(new Response("Shot not found", { status: 404 }));
     }
+    if (method === "PUT" && url.pathname === "/api/v1/scale/tare") {
+      scaleTareCount += 1;
+      return Promise.resolve(new Response("", { status: 200 }));
+    }
     if (method === "GET" && url.pathname === "/api/v1/steams") return responseJson(options.steams ?? []);
     if (method === "GET" && url.pathname === "/api/v1/sensors") return responseJson(sensors);
     if (method === "POST" && url.pathname.startsWith("/api/v1/sensors/") && url.pathname.endsWith("/execute")) {
@@ -407,6 +412,9 @@ function mockReaFetch(
     },
     get sensorExecuteCount() {
       return sensorExecuteCount;
+    },
+    get scaleTareCount() {
+      return scaleTareCount;
     },
     get communityDownloadIds() {
       return communityDownloadIds;
@@ -487,6 +495,7 @@ const detectedR2Sensor: SensorListItem = {
 describe("App shell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
     profiles = [
       { id: "p1", profile: { title: "Blooming" } },
       { id: "p2", profile: { title: "Classic" } }
@@ -494,6 +503,7 @@ describe("App shell", () => {
   });
 
   afterEach(() => {
+    delete globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__;
     vi.restoreAllMocks();
     vi.useRealTimers();
     localStorage.clear();
@@ -509,6 +519,23 @@ describe("App shell", () => {
 
     expect(screen.getByRole("heading", { name: "Bags" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Bag Filters" })).toBeInTheDocument();
+  });
+
+  it("writes structured skin logs to the console for machine log capture", async () => {
+    globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__ = true;
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    mockReaFetch(initialSettings);
+
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Light Blooming" });
+    const readyLog = consoleLog.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.startsWith("[WorkFlow Skin] ") && line.includes('"event":"skin_ready"'));
+
+    expect(readyLog).toEqual(expect.any(String));
+    expect(readyLog ?? "").toContain(`"version":"${skinManifest.version}"`);
+    expect(readyLog ?? "").toContain('"page":"brew"');
   });
 
   it("renders WorkFlow in the menu and machine status in the fixed top bar", async () => {
@@ -1450,6 +1477,53 @@ describe("App shell", () => {
     expect(screen.getByText("Duration: 28s")).toBeInTheDocument();
     expect(screen.getByText("Yield: 40 g")).toBeInTheDocument();
     expect(screen.queryByText("Duration: 20s")).not.toBeInTheDocument();
+    expect(fetchState.scaleTareCount).toBe(0);
+  });
+
+  it("tares the scale and stays on brew when espresso returns idle without a new shot", async () => {
+    vi.useFakeTimers();
+    const previousShot: ShotRecord = {
+      id: "previous-shot",
+      timestamp: "2026-06-12T09:30:00.000Z",
+      workflow: { context: { extras: { workflowSkin: { selectedProfileId: "p1" } } } },
+      measurements: [
+        { machine: { timestamp: "2026-06-12T09:30:00.000Z", pressure: 1, flow: 1 }, scale: { weight: 2 } },
+        { machine: { timestamp: "2026-06-12T09:30:20.000Z", pressure: 7, flow: 2 }, scale: { weight: 30 } }
+      ]
+    };
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
+      shots: [previousShot]
+    });
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "espresso", substate: "pouring" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
+    expect(fetchState.scaleTareCount).toBe(1);
+    expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
   });
 
   it("measures R2 twenty seconds after the shot reaches the review page", async () => {

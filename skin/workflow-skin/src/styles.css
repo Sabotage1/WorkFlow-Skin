@@ -608,7 +608,8 @@ button {
 
 .preset-button {
   display: grid;
-  grid-template-columns: 1fr 40px;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  min-width: 0;
   border: 1px solid #34414b;
   border-radius: 8px;
   overflow: hidden;
@@ -633,6 +634,11 @@ button {
   padding: 8px 10px;
   text-align: left;
   cursor: pointer;
+}
+
+.preset-button > button:first-child {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .preset-button button:disabled {
@@ -662,6 +668,9 @@ button {
 .preset-button button span,
 .preset-button button strong {
   display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .community-star-rating {
@@ -694,6 +703,12 @@ button {
   display: grid;
   place-items: center;
   border-left: 1px solid #34414b !important;
+}
+
+.preset-button > .icon-button {
+  min-width: 52px;
+  width: 52px;
+  padding: 0 !important;
 }
 
 .metric-tile {
@@ -2087,6 +2102,31 @@ textarea {
   .profile-picker,
   .water-refill-card {
     scroll-behavior: auto;
+  }
+
+  .page-surface,
+  .panel,
+  .recommendation-row,
+  .history-shot-row,
+  .list-row {
+    contain: layout paint;
+  }
+
+  .panel,
+  .recommendation-row,
+  .history-shot-row,
+  .list-row {
+    content-visibility: auto;
+    contain-intrinsic-size: 220px;
+  }
+
+  .nav-button,
+  .top-status-chip,
+  .sleep-button,
+  .preset-button,
+  .preset-button button,
+  .history-shot-row {
+    transition: none !important;
   }
 
   .top-status-bar,

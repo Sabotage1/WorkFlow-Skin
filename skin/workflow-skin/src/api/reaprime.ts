@@ -504,6 +504,12 @@ export class ReaPrimeApi {
     });
   }
 
+  tareScale() {
+    return this.request<void>("/api/v1/scale/tare", {
+      method: "PUT"
+    });
+  }
+
   requestMachineState(state: string) {
     return this.request<void>(`/api/v1/machine/state/${encodeURIComponent(state)}`, {
       method: "PUT"

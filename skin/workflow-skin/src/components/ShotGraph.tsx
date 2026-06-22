@@ -90,21 +90,54 @@ function timerElapsedSeconds(value: number, timerValuesAreMilliseconds: boolean)
   return timerValuesAreMilliseconds ? value / 1000 : value;
 }
 
-function elapsedTimeline(measurements: ShotSnapshot[]): Array<number | null> {
-  const timerValues = measurements.map(timerValue).filter((value): value is number => value !== null);
-  if (timerValues.length) {
-    const timerValuesAreMilliseconds = timerValues.some((value) => value > 120);
-    let lastTimer: number | null = null;
-    return measurements.map((measurement) => {
-      const timer = timerValue(measurement);
-      if (timer !== null) lastTimer = timerElapsedSeconds(timer, timerValuesAreMilliseconds);
-      return lastTimer;
-    });
-  }
-
+function timestampTimeline(measurements: ShotSnapshot[]): Array<number | null> {
   const timestamps = measurements.map(timestampMs).filter((value): value is number => value !== null);
   const startTime = timestamps.length ? timestamps[0] : null;
   return measurements.map((measurement, index) => elapsedSecondsFromTimestamp(measurements, measurement, index, startTime));
+}
+
+function scaleTimerTimeline(measurements: ShotSnapshot[], timerValues: number[]): Array<number | null> {
+  const timerValuesAreMilliseconds = timerValues.some((value) => value > 120);
+  let lastTimer: number | null = null;
+  return measurements.map((measurement) => {
+    const timer = timerValue(measurement);
+    if (timer !== null) lastTimer = timerElapsedSeconds(timer, timerValuesAreMilliseconds);
+    return lastTimer;
+  });
+}
+
+function activeBrewSample(measurement: ShotSnapshot): boolean {
+  const pressure = numeric(measurement.machine?.pressure) ?? 0;
+  const flow = numeric(measurement.machine?.flow) ?? 0;
+  const weightFlow = numeric(measurement.scale?.weightFlow) ?? 0;
+  return pressure > 1.5 || flow > 0.2 || Math.abs(weightFlow) > 0.2;
+}
+
+function timelineMax(timeline: Array<number | null>): number {
+  return Math.max(0, ...timeline.filter((value): value is number => value !== null));
+}
+
+function timerStopsBeforeActiveBrewEnds(measurements: ShotSnapshot[], timerTimeline: Array<number | null>, timestampTimelineValues: Array<number | null>): boolean {
+  const timerMax = timelineMax(timerTimeline);
+  const timestampMax = timelineMax(timestampTimelineValues);
+  if (timestampMax <= timerMax + 2) return false;
+
+  return measurements.some((measurement, index) => {
+    const timestampSeconds = timestampTimelineValues[index];
+    if (timestampSeconds === null || timestampSeconds <= timerMax + 1) return false;
+    return activeBrewSample(measurement);
+  });
+}
+
+function elapsedTimeline(measurements: ShotSnapshot[]): Array<number | null> {
+  const timerValues = measurements.map(timerValue).filter((value): value is number => value !== null);
+  if (timerValues.length) {
+    const timerTimeline = scaleTimerTimeline(measurements, timerValues);
+    const timestampTimelineValues = timestampTimeline(measurements);
+    return timerStopsBeforeActiveBrewEnds(measurements, timerTimeline, timestampTimelineValues) ? timestampTimelineValues : timerTimeline;
+  }
+
+  return timestampTimeline(measurements);
 }
 
 function elapsedSecondsFromTimestamp(measurements: ShotSnapshot[], measurement: ShotSnapshot, index: number, startTime: number | null): number {

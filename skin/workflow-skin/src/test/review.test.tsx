@@ -405,6 +405,42 @@ describe("ReviewPage", () => {
     expect(screen.getByText("Duration: 27s")).toBeInTheDocument();
   });
 
+  it("refreshes the latest shot when the opening graph is only a partial live capture", async () => {
+    const partialShot: ShotRecord = {
+      ...shot,
+      measurements: [
+        { machine: { timestamp: "2026-06-09T10:00:00.000Z", pressure: 2, flow: 1 } },
+        { machine: { timestamp: "2026-06-09T10:00:09.000Z", pressure: 8, flow: 2 }, scale: { weight: 22 } }
+      ]
+    };
+    const fullShot: ShotRecord = {
+      ...partialShot,
+      measurements: [
+        { machine: { timestamp: "2026-06-09T10:00:00.000Z", pressure: 2, flow: 1 } },
+        { machine: { timestamp: "2026-06-09T10:00:09.000Z", pressure: 8, flow: 2 }, scale: { weight: 22 } },
+        { machine: { timestamp: "2026-06-09T10:00:18.000Z", pressure: 7, flow: 1.8 }, scale: { weight: 36 } }
+      ]
+    };
+    const onLoadShot = vi.fn().mockResolvedValue(fullShot);
+
+    render(
+      <ReviewPage
+        shot={partialShot}
+        previousShots={[]}
+        onSaveAnnotations={vi.fn()}
+        onUploadVisualizer={vi.fn()}
+        r2Sensor={null}
+        onReadR2={vi.fn()}
+        onLoadShot={onLoadShot}
+      />
+    );
+
+    expect(screen.getByText("Duration: 9s")).toBeInTheDocument();
+    await waitFor(() => expect(onLoadShot).toHaveBeenCalledWith("s1"));
+    expect(await screen.findByText("Duration: 18s")).toBeInTheDocument();
+    expect(screen.queryByText("Duration: 9s")).not.toBeInTheDocument();
+  });
+
   it("refreshes the selected graph after saving review fields", async () => {
     const currentShot: ShotRecord = {
       ...shot,
@@ -659,9 +695,11 @@ describe("ReviewPage", () => {
     };
     const data = appData({ shots: [currentShot] });
     appMocks.data = data;
+    appMocks.getShot.mockImplementation((shotId: string) => Promise.resolve(shotId === "s2" ? newerShot : currentShot));
     const { rerender } = render(<App />);
 
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    await waitFor(() => expect(appMocks.getShot).toHaveBeenCalledWith("s1"));
     await userEvent.clear(screen.getByLabelText("TDS"));
     await userEvent.type(screen.getByLabelText("TDS"), "9.5");
     expect(screen.getByLabelText("TDS")).toHaveValue("9.5");
@@ -669,6 +707,7 @@ describe("ReviewPage", () => {
     data.shots = [newerShot, currentShot];
     rerender(<App />);
 
+    await waitFor(() => expect(appMocks.getShot).toHaveBeenCalledWith("s2"));
     expect(screen.getByLabelText("TDS")).toHaveValue("8.1");
     expect(screen.getByLabelText("Dose")).toHaveValue("20");
   });
@@ -693,7 +732,7 @@ describe("ReviewPage", () => {
       ]
     };
     appMocks.data = appData({ shots: [currentShot, previousSummary] });
-    appMocks.getShot.mockResolvedValue(previousFull);
+    appMocks.getShot.mockImplementation((shotId: string) => Promise.resolve(shotId === "same-1" ? previousFull : currentShot));
 
     render(<App />);
 
@@ -702,7 +741,7 @@ describe("ReviewPage", () => {
 
     fireEvent.change(screen.getByLabelText("Shot scrubber"), { target: { value: "1" } });
 
-    expect(appMocks.getShot).toHaveBeenCalledWith("same-1");
+    await waitFor(() => expect(appMocks.getShot).toHaveBeenCalledWith("same-1"));
     expect(await screen.findByText("Flow")).toBeInTheDocument();
     expect(screen.getByText("Duration: 27s")).toBeInTheDocument();
   });

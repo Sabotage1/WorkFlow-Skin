@@ -33,6 +33,15 @@ describe("ReaPrimeApi", () => {
     expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/account/decent", expect.objectContaining({ method: "GET" }));
   });
 
+  it("tares the connected scale through ReaPrime", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const api = new ReaPrimeApi("http://machine:8080");
+
+    await expect(api.tareScale()).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
+  });
+
   it("updates profiles through the ReaPrime profiles API", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ id: "p1", profile: { title: "Bloom v2", author: "Roy" } }), { status: 200 })

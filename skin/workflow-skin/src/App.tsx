@@ -88,12 +88,23 @@ import {
 import { useLiveTelemetry } from "./state/useLiveTelemetry";
 import { useReaData } from "./state/useReaData";
 
+declare global {
+  var __WORKFLOW_SKIN_ENABLE_TEST_LOGS__: boolean | undefined;
+}
+
 type Page = MainMenuItemId | "screensaver";
+type CompletedActivityCapture = {
+  activity: CompletedWorkflowActivity;
+  profileId?: string;
+  startLatestShotId?: string | null;
+};
 
 const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
+const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
+const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
 interface TopStatusIndicator {
   id: TopStatusIndicatorId;
@@ -128,6 +139,23 @@ function dateOnlyToIsoDateTime(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed;
+}
+
+function skinLog(event: string, details: Record<string, unknown> = {}) {
+  if (typeof process !== "undefined" && process.env.NODE_ENV === "test" && !globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__) return;
+
+  try {
+    console.log(
+      `${SKIN_LOG_PREFIX} ${JSON.stringify({
+        event,
+        version: CURRENT_SKIN_VERSION,
+        timestamp: new Date().toISOString(),
+        ...details
+      })}`
+    );
+  } catch {
+    console.log(`${SKIN_LOG_PREFIX} ${event}`);
+  }
 }
 
 function compactStateName(value: string | undefined): string {
@@ -629,13 +657,20 @@ export function App() {
   });
   const startupConnectRef = useRef(false);
   const knownLatestShotIdRef = useRef<string | null | undefined>(undefined);
+  const idleLatestShotIdRef = useRef<string | null | undefined>(undefined);
   const autoReadR2ShotIdRef = useRef<string | null>(null);
   const [autoReadR2ShotId, setAutoReadR2ShotId] = useState<string | null>(null);
   const sleepMachineRef = useRef<(() => Promise<void>) | null>(null);
   const lastUseAtRef = useRef(lastUseAt);
+  const lastUseStateAtRef = useRef(lastUseAt);
   const autoSleepPendingRef = useRef(false);
-  const completedActivityRef = useRef<{ activity: CompletedWorkflowActivity; profileId?: string } | null>(null);
+  const completedActivityRef = useRef<CompletedActivityCapture | null>(null);
+  const completedActivityRoutingRef = useRef(false);
   const completedActivityTimerRef = useRef<number | null>(null);
+  const ignoreActiveActivityUntilAtRef = useRef(0);
+  const readyLogRef = useRef(false);
+  const lastLoggedPageRef = useRef<Page | null>(null);
+  const lastLoggedMachineModeRef = useRef<string | null>(null);
   const wasSleepingRef = useRef<boolean | null>(null);
   const scaleReconnectRef = useRef<{ signature: string | null; lastAttemptAt: number; pending: boolean }>({
     signature: null,
@@ -1126,15 +1161,45 @@ export function App() {
   }, [api, data.loaded, data.settings.keepScreenAwake, page]);
 
   useEffect(() => {
+    if (!data.loaded || readyLogRef.current) return;
+    const machineMode = currentMachineMode ?? "unknown";
+    readyLogRef.current = true;
+    lastLoggedPageRef.current = page;
+    lastLoggedMachineModeRef.current = machineMode;
+    skinLog("skin_ready", { page, machineMode });
+  }, [currentMachineMode, data.loaded, page]);
+
+  useEffect(() => {
+    if (!data.loaded || !readyLogRef.current || lastLoggedPageRef.current === page) return;
+    lastLoggedPageRef.current = page;
+    skinLog("page_changed", { page });
+  }, [data.loaded, page]);
+
+  useEffect(() => {
+    if (!data.loaded || !readyLogRef.current) return;
+    const machineMode = currentMachineMode ?? "unknown";
+    if (lastLoggedMachineModeRef.current === machineMode) return;
+    lastLoggedMachineModeRef.current = machineMode;
+    skinLog("machine_mode_changed", { machineMode, page });
+  }, [currentMachineMode, data.loaded, page]);
+
+  useEffect(() => {
     if (!data.loaded || page === "live" || page === "screensaver") return;
     if (brewingCoffee) setPage("live");
   }, [brewingCoffee, data.loaded, page]);
 
   useEffect(() => {
     if (!data.loaded || page !== "live" || brewingCoffee) return;
-    if (completedActivityRef.current?.activity === "brew" || completedActivityTimerRef.current !== null) return;
+    if (completedActivityRef.current?.activity === "brew" || completedActivityRoutingRef.current || completedActivityTimerRef.current !== null) return;
+    if (latestShot) {
+      const fallbackReviewShot = shotWithFallbackMeasurements(latestShot, liveTelemetry.measurements);
+      setCompletedReviewShot(fallbackReviewShot);
+      setLastCompletedProfileId(selectedProfileIdFromWorkflow(fallbackReviewShot.workflow, data.profiles));
+      setPage("review");
+      return;
+    }
     setPage("brew");
-  }, [brewingCoffee, data.loaded, page]);
+  }, [brewingCoffee, data.loaded, data.profiles, latestShot, liveTelemetry.measurements, page]);
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -1165,26 +1230,53 @@ export function App() {
   }, [api, currentMachineMode, data.loaded, liveTelemetry.machineMode?.state, page]);
 
   const routeCompletedActivity = useCallback(
-    async (completed: { activity: CompletedWorkflowActivity; profileId?: string }) => {
-      if (completed.activity === "brew") setPage("review");
-      await data.refresh();
-      if (completed.activity === "brew") {
-        const latestCompletedShot = await api.getLatestShot().catch(() => latestShot);
-        const completedShotForReview = latestCompletedShot ? shotWithFallbackMeasurements(latestCompletedShot, liveTelemetry.measurements) : null;
-        if (completedShotForReview) setCompletedReviewShot(completedShotForReview);
+    async (completed: CompletedActivityCapture) => {
+      if (completedActivityRoutingRef.current) return;
+      completedActivityRoutingRef.current = true;
+      try {
+        if (completed.activity === "brew") setPage("review");
+        await data.refresh();
+        if (completed.activity === "brew") {
+          const latestCompletedShot = await api.getLatestShot().catch(() => latestShot);
+          if (!latestCompletedShot || (completed.startLatestShotId !== undefined && latestCompletedShot.id === completed.startLatestShotId)) {
+            setCompletedReviewShot(null);
+            setAutoReadR2ShotId(null);
+            autoReadR2ShotIdRef.current = null;
+            ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
+            skinLog("brew_canceled", { startLatestShotId: completed.startLatestShotId ?? null });
+            try {
+              await api.tareScale();
+              skinLog("scale_tare_after_canceled_brew", { ok: true });
+            } catch (error) {
+              skinLog("scale_tare_after_canceled_brew", { ok: false, error: errorMessage(error) });
+              setStatus({ type: "error", message: `Shot canceled. Could not tare scale: ${errorMessage(error)}` });
+            }
+            await data.refresh();
+            setPage("brew");
+            return;
+          }
 
-        if (completedShotForReview && r2Available && autoReadR2ShotIdRef.current !== completedShotForReview.id) {
-          autoReadR2ShotIdRef.current = completedShotForReview.id;
-          setAutoReadR2ShotId(completedShotForReview.id);
+          const completedShotForReview = latestCompletedShot ? shotWithFallbackMeasurements(latestCompletedShot, liveTelemetry.measurements) : null;
+          if (completedShotForReview) setCompletedReviewShot(completedShotForReview);
+
+          if (completedShotForReview && r2Available && autoReadR2ShotIdRef.current !== completedShotForReview.id) {
+            autoReadR2ShotIdRef.current = completedShotForReview.id;
+            setAutoReadR2ShotId(completedShotForReview.id);
+          }
+
+          const completedProfileId = completed.profileId ?? selectedProfileIdFromWorkflow(completedShotForReview?.workflow, data.profiles);
+          setLastCompletedProfileId(completedProfileId);
+          ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
+          skinLog("brew_completed", { shotId: completedShotForReview?.id ?? null, profileId: completedProfileId ?? null });
+          setPage("review");
+          return;
         }
 
-        const completedProfileId = completed.profileId ?? selectedProfileIdFromWorkflow(completedShotForReview?.workflow, data.profiles);
-        setLastCompletedProfileId(completedProfileId);
+        ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
         setPage("review");
-        return;
+      } finally {
+        completedActivityRoutingRef.current = false;
       }
-
-      setPage("review");
     },
     [api, data.profiles, data.refresh, latestShot, liveTelemetry.measurements, r2Available]
   );
@@ -1194,7 +1286,15 @@ export function App() {
 
     const activeActivity = workflowActivityForMode(currentMachineMode);
     if (activeActivity) {
-      completedActivityRef.current = { activity: activeActivity, profileId: selectedProfileId };
+      if (completedActivityRoutingRef.current) return;
+      if (Date.now() < ignoreActiveActivityUntilAtRef.current) return;
+      if (completedActivityRef.current?.activity !== activeActivity) {
+        completedActivityRef.current = {
+          activity: activeActivity,
+          profileId: selectedProfileId,
+          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current : undefined
+        };
+      }
       if (completedActivityTimerRef.current !== null) {
         window.clearTimeout(completedActivityTimerRef.current);
         completedActivityTimerRef.current = null;
@@ -1202,10 +1302,12 @@ export function App() {
       return;
     }
 
-    if (!isIdleMode(currentMachineMode) || !completedActivityRef.current) return;
+    if (!isIdleMode(currentMachineMode)) return;
+    if (!completedActivityRef.current) return;
 
     const completed = completedActivityRef.current;
     if (completed.activity === "brew") {
+      if (completedActivityRoutingRef.current) return;
       completedActivityRef.current = null;
       void routeCompletedActivity(completed);
       return;
@@ -1217,7 +1319,7 @@ export function App() {
       completedActivityRef.current = null;
       void routeCompletedActivity(completed);
     }, POST_ACTIVITY_ROUTE_DELAY_MS);
-  }, [currentMachineMode, data.loaded, routeCompletedActivity, selectedProfileId]);
+  }, [currentMachineMode, data.loaded, latestShot?.id, routeCompletedActivity, selectedProfileId]);
 
   useEffect(() => {
     return () => {
@@ -1239,11 +1341,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (workflowActivityForMode(currentMachineMode)) setLastUseAt(Date.now());
+    if (!workflowActivityForMode(currentMachineMode)) return;
+    const now = Date.now();
+    autoSleepPendingRef.current = false;
+    lastUseAtRef.current = now;
+    lastUseStateAtRef.current = now;
+    setLastUseAt(now);
   }, [currentMachineMode]);
 
   useEffect(() => {
     lastUseAtRef.current = lastUseAt;
+    lastUseStateAtRef.current = lastUseAt;
   }, [lastUseAt]);
 
   useEffect(() => {
@@ -1251,7 +1359,10 @@ export function App() {
       const now = Date.now();
       autoSleepPendingRef.current = false;
       lastUseAtRef.current = now;
-      setLastUseAt(now);
+      if (now - lastUseStateAtRef.current >= 1000) {
+        lastUseStateAtRef.current = now;
+        setLastUseAt(now);
+      }
     };
     const passiveOptions: AddEventListenerOptions = { passive: true };
     window.addEventListener("pointerdown", markUse, passiveOptions);
@@ -1284,6 +1395,11 @@ export function App() {
       setAutoReadR2ShotId(latestShot.id);
     }
   }, [data.loaded, latestShot, r2Available]);
+
+  useEffect(() => {
+    if (!data.loaded || !isIdleMode(currentMachineMode)) return;
+    idleLatestShotIdRef.current = latestShot?.id ?? null;
+  }, [currentMachineMode, data.loaded, latestShot?.id]);
 
   const toggleReview = async (profileId: string, enabled: boolean) => {
     try {
@@ -1753,6 +1869,7 @@ export function App() {
     const now = Date.now();
     autoSleepPendingRef.current = false;
     lastUseAtRef.current = now;
+    lastUseStateAtRef.current = now;
     setLastUseAt(now);
     setPage("brew");
     await api.setDisplayBrightness(100).catch(() => undefined);
@@ -1789,7 +1906,7 @@ export function App() {
     checkIdle();
     const timer = window.setInterval(checkIdle, autoSleepCheckIntervalMs(idleLimitMs));
     return () => window.clearInterval(timer);
-  }, [currentMachineMode, data.loaded, data.settings.autoSleepMinutes, lastUseAt, machineConnected, page]);
+  }, [currentMachineMode, data.loaded, data.settings.autoSleepMinutes, machineConnected, page]);
 
   const forceScaleConnection = async () => {
     setStatus({ type: "success", message: "Scanning for scale." });

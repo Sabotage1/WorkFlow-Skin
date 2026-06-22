@@ -36,6 +36,45 @@ function shotProfileTitle(shot: ShotRecord): string {
   return typeof shot.workflow?.profile?.title === "string" ? shot.workflow.profile.title.trim() : "";
 }
 
+function measurementSpanSeconds(measurements: ShotRecord["measurements"]): number {
+  const timestamps = (measurements ?? [])
+    .map((sample) => sample.machine?.timestamp ?? sample.scale?.timestamp)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  if (timestamps.length < 2) return 0;
+  return Math.max(0, (timestamps[timestamps.length - 1] - timestamps[0]) / 1000);
+}
+
+function preferShotForGraph(existing: ShotRecord | undefined, candidate: ShotRecord): ShotRecord {
+  if (!existing) return candidate;
+
+  const existingMeasurements = existing.measurements ?? [];
+  const candidateMeasurements = candidate.measurements ?? [];
+  if (candidateMeasurements.length === 0 && existingMeasurements.length > 0) {
+    return {
+      ...candidate,
+      annotations: { ...candidate.annotations, ...existing.annotations },
+      measurements: existingMeasurements
+    };
+  }
+
+  const candidateIsMoreComplete =
+    measurementSpanSeconds(candidateMeasurements) > measurementSpanSeconds(existingMeasurements) ||
+    candidateMeasurements.length > existingMeasurements.length;
+  const primary = candidateIsMoreComplete ? candidate : existing;
+  const secondary = candidateIsMoreComplete ? existing : candidate;
+
+  return {
+    ...secondary,
+    ...primary,
+    annotations: candidateIsMoreComplete
+      ? { ...existing.annotations, ...candidate.annotations }
+      : { ...candidate.annotations, ...existing.annotations },
+    measurements: primary.measurements
+  };
+}
+
 export function ReviewPage({
   shot,
   previousShots,
@@ -143,14 +182,15 @@ export function ReviewPage({
   const selectedGraphLoading =
     Boolean(loadingGraphShotIds[selectedShot.id]) ||
     Boolean(onLoadShot && selectedShot.id && !selectedShotHasGraph && !failedGraphShotIds[selectedShot.id]);
+  const sourceShotsById = useMemo(() => new Map([shot, ...previousShots].map((item) => [item.id, item])), [previousShots, shot]);
 
   const loadShotGraph = useCallback(
-    async (shotId: string, options: { force?: boolean } = {}) => {
+    async (shotId: string, options: { force?: boolean; background?: boolean } = {}) => {
       if (!onLoadShot || !shotId) return null;
       if (!options.force && requestedShotIdsRef.current.has(shotId)) return null;
 
       requestedShotIdsRef.current.add(shotId);
-      setLoadingGraphShotIds((current) => ({ ...current, [shotId]: true }));
+      if (!options.background) setLoadingGraphShotIds((current) => ({ ...current, [shotId]: true }));
       setFailedGraphShotIds((current) => {
         if (!current[shotId]) return current;
         const next = { ...current };
@@ -161,11 +201,16 @@ export function ReviewPage({
       try {
         const fullShot = await Promise.resolve(onLoadShot(shotId));
         if (fullShot) {
-          setLoadedShotsById((current) => ({ ...current, [fullShot.id]: fullShot }));
-          if ((fullShot.measurements?.length ?? 0) === 0) {
+          const fallbackShot = sourceShotsById.get(fullShot.id);
+          const preferredShot = preferShotForGraph(fallbackShot, fullShot);
+          setLoadedShotsById((current) => ({
+            ...current,
+            [fullShot.id]: preferShotForGraph(current[fullShot.id] ?? fallbackShot, fullShot)
+          }));
+          if ((preferredShot.measurements?.length ?? 0) === 0) {
             setFailedGraphShotIds((current) => ({ ...current, [shotId]: true }));
           }
-          return fullShot;
+          return preferredShot;
         }
 
         setFailedGraphShotIds((current) => ({ ...current, [shotId]: true }));
@@ -174,10 +219,10 @@ export function ReviewPage({
         setFailedGraphShotIds((current) => ({ ...current, [shotId]: true }));
         return null;
       } finally {
-        setLoadingGraphShotIds((current) => ({ ...current, [shotId]: false }));
+        if (!options.background) setLoadingGraphShotIds((current) => ({ ...current, [shotId]: false }));
       }
     },
-    [onLoadShot]
+    [onLoadShot, sourceShotsById]
   );
 
   function reviewAnnotations(): ShotAnnotations {
@@ -286,10 +331,16 @@ export function ReviewPage({
   }, [shot.id]);
 
   useEffect(() => {
-    if (!onLoadShot || !selectedShot.id || (selectedShot.measurements?.length ?? 0) > 0) return;
+    if (!onLoadShot || !selectedShot.id) return;
     if (failedGraphShotIds[selectedShot.id]) return;
-    void loadShotGraph(selectedShot.id);
-  }, [failedGraphShotIds, loadShotGraph, onLoadShot, selectedShot.id, selectedShot.measurements?.length]);
+    if ((selectedShot.measurements?.length ?? 0) === 0) {
+      void loadShotGraph(selectedShot.id);
+      return;
+    }
+    if (selectedShotIsLatest && !requestedShotIdsRef.current.has(selectedShot.id)) {
+      void loadShotGraph(selectedShot.id, { background: true });
+    }
+  }, [failedGraphShotIds, loadShotGraph, onLoadShot, selectedShot.id, selectedShot.measurements?.length, selectedShotIsLatest]);
 
   return (
     <div className="workflow-grid">
