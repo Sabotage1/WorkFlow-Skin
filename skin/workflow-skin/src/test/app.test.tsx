@@ -502,6 +502,15 @@ const detectedR2Sensor: SensorListItem = {
   }
 };
 
+const detectedScaleSensor: SensorListItem = {
+  id: "scale-sensor-1",
+  info: {
+    name: "Acaia Lunar",
+    vendor: "Acaia",
+    data: [{ key: "weight", type: "number", unit: "g" }]
+  }
+};
+
 describe("App shell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -1296,7 +1305,59 @@ describe("App shell", () => {
     expect(screen.getByRole("button", { name: "Sweet Classic" })).not.toHaveAttribute("aria-current");
   });
 
-  it("re-applies the startup profile and reconnects devices after waking from screensaver sleep", async () => {
+  it("does not let wake recovery overwrite a manual preset change with the startup profile", async () => {
+    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia", type: "scale", state: "discovered" };
+    const fetchState = mockReaFetch(
+      {
+        ...initialSettings,
+        startupProfileId: "p2",
+        keepScreenAwake: true,
+        screensaverBrightness: 8,
+        presetSlots: [
+          { label: "Light", profileId: "p1" },
+          { label: "Sweet", profileId: "p2" },
+          { label: "Turbo" },
+          { label: "Classic" }
+        ]
+      },
+      {
+        workflow: { context: { extras: { workflowSkin: { selectedProfileId: "p2" } } } },
+        machineState: { connected: true, state: { state: "idle" } },
+        devices: [],
+        scanDevicesResult: [scaleDevice]
+      }
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    await waitFor(() =>
+      expect(fetchState.workflow).toEqual(
+        expect.objectContaining({
+          context: expect.objectContaining({ extras: { workflowSkin: { selectedProfileId: "p1" } } })
+        })
+      )
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 750));
+    });
+
+    expect(screen.getByRole("button", { name: "Light Blooming" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).not.toHaveAttribute("aria-current");
+    expect(fetchState.workflow).toEqual(
+      expect.objectContaining({
+        context: expect.objectContaining({ extras: { workflowSkin: { selectedProfileId: "p1" } } })
+      })
+    );
+  });
+
+  it("reconnects devices after waking from screensaver sleep without re-applying the startup profile", async () => {
     const fetchState = mockReaFetch({
       ...initialSettings,
       startupProfileId: "p2",
@@ -1319,12 +1380,11 @@ describe("App shell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
 
-    await waitFor(() => expect(fetchState.workflowUpdateCount).toBeGreaterThan(1));
     await waitFor(() => expect(fetchState.scanCount).toBeGreaterThan(scansBeforeWake));
     expect(fetchState.workflow).toEqual(
       expect.objectContaining({
         context: expect.objectContaining({
-          extras: { workflowSkin: { selectedProfileId: "p2" } }
+          extras: { workflowSkin: { selectedProfileId: "p1" } }
         })
       })
     );
@@ -2266,6 +2326,29 @@ describe("App shell", () => {
     });
   });
 
+  it("refreshes R2 when pressing a configured R2 indicator backed only by stale sensor data", async () => {
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
+      {
+        sensors: [detectedR2Sensor],
+        devices: [],
+        scanDevicesResult: ({ scanCount }) => (scanCount < 2 ? [] : [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }]),
+        sensorsAfterScan: [detectedR2Sensor]
+      }
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
+    await userEvent.click(screen.getByRole("button", { name: "R2" }));
+
+    await waitFor(() => {
+      expect(fetchState.fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8080/api/v1/devices/connect",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
+      );
+    });
+  });
+
   it("keeps refreshing R2 after the indicator connect until the native device shows connected", async () => {
     const r2Device = (state: string): DeviceInfo => ({ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state });
     const fetchState = mockReaFetch(
@@ -2332,6 +2415,26 @@ describe("App shell", () => {
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
     );
+  });
+
+  it("connects the scale when pressing a Scale indicator backed only by stale sensor data", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      sensors: [detectedScaleSensor],
+      devices: [],
+      scanDevicesResult: ({ scanCount }) => (scanCount < 1 ? [] : [{ id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" }])
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Not connected");
+    await userEvent.click(screen.getByRole("button", { name: "Scale" }));
+
+    await waitFor(() => {
+      expect(fetchState.fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8080/api/v1/devices/connect",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
+      );
+    });
+    expect(fetchState.scaleTareCount).toBe(0);
   });
 
   it("tares the scale when the connected Scale status is pressed", async () => {

@@ -133,6 +133,24 @@ describe("buildConnectivityStatuses", () => {
     });
   });
 
+  it("does not treat a stale scale sensor as connected when native devices are available", () => {
+    const statuses = buildConnectivityStatuses({
+      apiHost: "192.168.1.88",
+      machineState: { connected: true },
+      sensors: [scaleSensor],
+      devices: [],
+      r2SensorId: undefined,
+      r2Sensor: null
+    });
+
+    expect(statuses.find((status) => status.id === "scale")).toEqual({
+      id: "scale",
+      label: "Scale",
+      detail: "Not connected",
+      connected: false
+    });
+  });
+
   it("marks water red when it is at or below the refill level", () => {
     const statuses = buildConnectivityStatuses({
       apiHost: "192.168.1.88",
@@ -195,6 +213,24 @@ describe("buildConnectivityStatuses", () => {
       label: "R2",
       detail: "Connected",
       connected: true
+    });
+  });
+
+  it("does not treat a stale configured R2 sensor as connected when native devices are available", () => {
+    const statuses = buildConnectivityStatuses({
+      apiHost: "192.168.1.88",
+      machineState: { connected: true },
+      sensors: [r2Sensor],
+      devices: [],
+      r2SensorId: "r2-1",
+      r2Sensor
+    });
+
+    expect(statuses.find((status) => status.id === "r2")).toEqual({
+      id: "r2",
+      label: "R2",
+      detail: "Not connected",
+      connected: false
     });
   });
 });

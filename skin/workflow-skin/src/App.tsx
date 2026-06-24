@@ -1575,6 +1575,7 @@ export function App() {
   };
 
   const applyProfileForBrew = async (profile: ProfileRecord) => {
+    startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
     await applyProfile(profile, { optimistic: true });
     setLastUseAt(Date.now());
   };
@@ -1622,7 +1623,6 @@ export function App() {
     wasSleepingRef.current = machineSleeping;
     if (wasSleeping !== true || machineSleeping) return;
 
-    resetStartupProfileApply();
     void requestScaleConnection()
       .catch(() => undefined)
       .then(() => connectConfiguredStartupDevices())
@@ -1630,7 +1630,7 @@ export function App() {
       .finally(() => {
         void data.refresh();
       });
-  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection, resetStartupProfileApply]);
+  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -1901,7 +1901,6 @@ export function App() {
     await data.refresh();
     await requestScaleConnection().catch(() => undefined);
     await connectConfiguredStartupDevices();
-    resetStartupProfileApply();
     await data.refresh();
   };
 
@@ -1976,7 +1975,7 @@ export function App() {
   const toggleStatusPopover = (nextStatus: TopStatusIndicator) => {
     if (nextStatus.id === "scale") {
       setExpandedStatusId(null);
-      if (nextStatus.connected) {
+      if (nextStatus.connected && hasConnectedScale(nativeDevices)) {
         void tareScaleFromIndicator();
       } else {
         void forceScaleConnection();

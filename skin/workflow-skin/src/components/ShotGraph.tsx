@@ -8,6 +8,7 @@ interface SeriesDefinition {
   color: string;
   dashArray?: string;
   value: (measurement: ShotSnapshot) => number | null;
+  timestamp: (measurement: ShotSnapshot) => number | null;
   scale?: (value: number) => number;
 }
 
@@ -25,33 +26,38 @@ const SERIES_DEFINITIONS: SeriesDefinition[] = [
     key: "pressure",
     label: "Pressure",
     color: "#76d99b",
-    value: (measurement) => numeric(measurement.machine?.pressure)
+    value: (measurement) => numeric(measurement.machine?.pressure),
+    timestamp: machineTimestampMs
   },
   {
     key: "flow",
     label: "Flow",
     color: "#8fb7ff",
-    value: (measurement) => numeric(measurement.machine?.flow)
+    value: (measurement) => numeric(measurement.machine?.flow),
+    timestamp: machineTimestampMs
   },
   {
     key: "targetPressure",
     label: "Target pressure",
     color: "#b2e9c5",
     dashArray: "6 5",
-    value: (measurement) => numeric(measurement.machine?.targetPressure)
+    value: (measurement) => numeric(measurement.machine?.targetPressure),
+    timestamp: machineTimestampMs
   },
   {
     key: "targetFlow",
     label: "Target flow",
     color: "#c3d8ff",
     dashArray: "6 5",
-    value: (measurement) => numeric(measurement.machine?.targetFlow)
+    value: (measurement) => numeric(measurement.machine?.targetFlow),
+    timestamp: machineTimestampMs
   },
   {
     key: "groupTemperature",
     label: "Temp / 10",
     color: "#f0a46c",
     value: (measurement) => numeric(measurement.machine?.groupTemperature) ?? numeric(measurement.machine?.mixTemperature),
+    timestamp: machineTimestampMs,
     scale: (value) => value / 10
   },
   {
@@ -60,50 +66,56 @@ const SERIES_DEFINITIONS: SeriesDefinition[] = [
     color: "#ffd2a8",
     dashArray: "6 5",
     value: (measurement) => numeric(measurement.machine?.targetGroupTemperature) ?? numeric(measurement.machine?.targetMixTemperature),
+    timestamp: machineTimestampMs,
     scale: (value) => value / 10
   },
   {
     key: "weightFlow",
     label: "Weight flow",
     color: "#d8c16b",
-    value: (measurement) => numeric(measurement.scale?.weightFlow)
+    value: (measurement) => numeric(measurement.scale?.weightFlow),
+    timestamp: scaleTimestampMs
   }
 ];
+
+const BREW_SUBSTATES = new Set(["preinfusion", "pouring"]);
 
 function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function timestampMs(measurement: ShotSnapshot): number | null {
-  const timestamp = measurement.machine?.timestamp ?? measurement.scale?.timestamp;
+function parseTimestampMs(timestamp: string | undefined): number | null {
   if (!timestamp) return null;
   const time = new Date(timestamp).getTime();
   return Number.isFinite(time) ? time : null;
 }
 
-function timerValue(measurement: ShotSnapshot): number | null {
-  const value = measurement.scale?.timerValue;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+function machineTimestampMs(measurement: ShotSnapshot): number | null {
+  return parseTimestampMs(measurement.machine?.timestamp);
 }
 
-function timerElapsedSeconds(value: number, timerValuesAreMilliseconds: boolean): number {
-  return timerValuesAreMilliseconds ? value / 1000 : value;
+function scaleTimestampMs(measurement: ShotSnapshot): number | null {
+  return parseTimestampMs(measurement.scale?.timestamp);
 }
 
-function timestampTimeline(measurements: ShotSnapshot[]): Array<number | null> {
-  const timestamps = measurements.map(timestampMs).filter((value): value is number => value !== null);
-  const startTime = timestamps.length ? timestamps[0] : null;
-  return measurements.map((measurement, index) => elapsedSecondsFromTimestamp(measurements, measurement, index, startTime));
+function preferredTimestampMs(measurement: ShotSnapshot): number | null {
+  return machineTimestampMs(measurement) ?? scaleTimestampMs(measurement);
 }
 
-function scaleTimerTimeline(measurements: ShotSnapshot[], timerValues: number[]): Array<number | null> {
-  const timerValuesAreMilliseconds = timerValues.some((value) => value > 120);
-  let lastTimer: number | null = null;
-  return measurements.map((measurement) => {
-    const timer = timerValue(measurement);
-    if (timer !== null) lastTimer = timerElapsedSeconds(timer, timerValuesAreMilliseconds);
-    return lastTimer;
+function brewSubstate(measurement: ShotSnapshot): string | null {
+  const value = measurement.machine?.state?.substate;
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function graphMeasurements(measurements: ShotSnapshot[]): ShotSnapshot[] {
+  const brewingSamples = measurements.filter((measurement) => {
+    const substate = brewSubstate(measurement);
+    return substate !== null && BREW_SUBSTATES.has(substate);
   });
+  if (brewingSamples.length > 0) return brewingSamples;
+
+  const activeSamples = measurements.filter(activeBrewSample);
+  return activeSamples.length > 1 ? activeSamples : measurements;
 }
 
 function activeBrewSample(measurement: ShotSnapshot): boolean {
@@ -113,47 +125,20 @@ function activeBrewSample(measurement: ShotSnapshot): boolean {
   return pressure > 1.5 || flow > 0.2 || Math.abs(weightFlow) > 0.2;
 }
 
-function timelineMax(timeline: Array<number | null>): number {
-  return Math.max(0, ...timeline.filter((value): value is number => value !== null));
-}
-
-function timerStopsBeforeActiveBrewEnds(measurements: ShotSnapshot[], timerTimeline: Array<number | null>, timestampTimelineValues: Array<number | null>): boolean {
-  const timerMax = timelineMax(timerTimeline);
-  const timestampMax = timelineMax(timestampTimelineValues);
-  if (timestampMax <= timerMax + 2) return false;
-
-  return measurements.some((measurement, index) => {
-    const timestampSeconds = timestampTimelineValues[index];
-    if (timestampSeconds === null || timestampSeconds <= timerMax + 1) return false;
-    return activeBrewSample(measurement);
-  });
-}
-
-function elapsedTimeline(measurements: ShotSnapshot[]): Array<number | null> {
-  const timerValues = measurements.map(timerValue).filter((value): value is number => value !== null);
-  if (timerValues.length) {
-    const timerTimeline = scaleTimerTimeline(measurements, timerValues);
-    const timestampTimelineValues = timestampTimeline(measurements);
-    return timerStopsBeforeActiveBrewEnds(measurements, timerTimeline, timestampTimelineValues) ? timestampTimelineValues : timerTimeline;
-  }
-
-  return timestampTimeline(measurements);
-}
-
-function elapsedSecondsFromTimestamp(measurements: ShotSnapshot[], measurement: ShotSnapshot, index: number, startTime: number | null): number {
-  const time = timestampMs(measurement);
+function elapsedSecondsFromTimestamp(time: number | null, index: number, startTime: number | null): number {
   if (time !== null && startTime !== null) return Math.max(0, (time - startTime) / 1000);
-  return measurements.length <= 1 ? 0 : index;
+  return index * 0.5;
 }
 
 function chartSeries(measurements: ShotSnapshot[]): ChartSeries[] {
-  const elapsedTimes = elapsedTimeline(measurements);
+  const visibleMeasurements = graphMeasurements(measurements);
+  const startTime = visibleMeasurements.map(preferredTimestampMs).find((value): value is number => value !== null) ?? null;
 
   return SERIES_DEFINITIONS.map((definition) => {
-    const points = measurements.flatMap((measurement, index) => {
+    const points = visibleMeasurements.flatMap((measurement, index) => {
       const value = definition.value(measurement);
-      const time = elapsedTimes[index];
-      if (value === null || time === null) return [];
+      if (value === null) return [];
+      const time = elapsedSecondsFromTimestamp(definition.timestamp(measurement) ?? preferredTimestampMs(measurement), index, startTime);
       return [
         {
           time,

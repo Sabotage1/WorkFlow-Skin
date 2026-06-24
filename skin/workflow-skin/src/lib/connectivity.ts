@@ -183,9 +183,14 @@ export function buildConnectivityStatuses({
   const machineConnected = Boolean(machineState && machineState.connected !== false);
   const ip = machineIp(machineState, appInfo, apiHost);
   const wifiConnected = Boolean(machineState && ip && machineState.wifi?.connected !== false && machineState.network?.connected !== false);
+  const nativeDevicesAvailable = Array.isArray(devices);
   const scaleConnectedByDevice = scaleConnectedFromDevices(devices);
   const scaleExplicitlyDisconnected = !scaleConnectedByDevice && scaleExplicitlyDisconnectedFromDevices(devices);
-  const hasScale = Boolean(scaleConnected) || scaleConnectedFromMachineState(machineState) || scaleConnectedByDevice || (!scaleExplicitlyDisconnected && sensors.some(isScaleSensor));
+  const hasScale =
+    Boolean(scaleConnected) ||
+    scaleConnectedFromMachineState(machineState) ||
+    scaleConnectedByDevice ||
+    (!nativeDevicesAvailable && !scaleExplicitlyDisconnected && sensors.some(isScaleSensor));
 
   const statuses: ConnectivityStatus[] = [
     { id: "machine", label: "Machine", detail: machineConnected ? "Connected" : "Not connected", connected: machineConnected },
@@ -198,7 +203,8 @@ export function buildConnectivityStatuses({
     const r2Devices = r2DevicesForStatus(devices, r2SensorId);
     const hasDisconnectedR2Device = r2Devices.some((device) => isDisconnectedDeviceState(device.state));
     const hasConnectedR2Device = r2Devices.some((device) => isConnectedDeviceState(device.state));
-    const connected = Boolean(r2Connected) || hasConnectedR2Device || (!hasDisconnectedR2Device && r2Devices.length === 0 && r2Sensor?.id === r2SensorId);
+    const connected =
+      Boolean(r2Connected) || hasConnectedR2Device || (!nativeDevicesAvailable && !hasDisconnectedR2Device && r2Devices.length === 0 && r2Sensor?.id === r2SensorId);
     statuses.push({ id: "r2", label: "R2", detail: connected ? "Connected" : "Not connected", connected });
   }
 
