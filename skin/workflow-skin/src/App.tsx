@@ -661,6 +661,7 @@ export function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [lastUseAt, setLastUseAt] = useState(() => Date.now());
   const [startupApplyTick, setStartupApplyTick] = useState(0);
+  const [startupProfileHoldId, setStartupProfileHoldId] = useState<string | null>(null);
   const [r2RefreshBusy, setR2RefreshBusy] = useState(false);
   const [lastCompletedProfileId, setLastCompletedProfileId] = useState<string | undefined>();
   const [fastMachineState, setFastMachineState] = useState<MachineState | null>(null);
@@ -719,7 +720,10 @@ export function App() {
   );
   const r2DeviceConnected = Boolean(connectedR2Device);
   const r2Available = Boolean(r2Sensor || data.settings.r2SensorId || connectedR2Device);
-  const selectedProfileId = selectedProfileIdFromWorkflow(data.workflow, data.profiles);
+  const workflowSelectedProfileId = selectedProfileIdFromWorkflow(data.workflow, data.profiles);
+  const selectedProfileId = startupProfileHoldId ?? workflowSelectedProfileId;
+  const heldStartupProfile = startupProfileHoldId ? data.profiles.find((profile) => profile.id === startupProfileHoldId) : undefined;
+  const displayWorkflow = heldStartupProfile ? workflowForSelectedProfile(data.workflow, heldStartupProfile) : data.workflow;
   const workflowPageProfileId = selectedProfileId ?? (page === "steam" || page === "review" ? lastCompletedProfileId : undefined);
   const activeProfile = data.profiles.find((profile) => profile.id === workflowPageProfileId);
   const refreshedCompletedReviewShot = completedReviewShot ? data.shots.find((shot) => shot.id === completedReviewShot.id) : undefined;
@@ -1073,6 +1077,7 @@ export function App() {
     const manualProfile = data.profiles.find((profile) => profile.id === manualProfileId);
     if (!manualProfile) return;
 
+    setStartupProfileHoldId(null);
     const nextWorkflow = workflowForSelectedProfile(data.workflow, manualProfile);
     const updatedWorkflow = await api.updateWorkflow(nextWorkflow);
     data.setWorkflow(updatedWorkflow);
@@ -1101,8 +1106,12 @@ export function App() {
 
   const resetStartupProfileApply = useCallback(() => {
     const startupProfileId = data.settings.startupProfileId;
-    if (!startupProfileId) return;
+    if (!startupProfileId) {
+      setStartupProfileHoldId(null);
+      return;
+    }
     startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
+    setStartupProfileHoldId(startupProfileId);
     setStartupApplyTick((tick) => tick + 1);
   }, [data.settings.startupProfileId]);
 
@@ -1128,6 +1137,7 @@ export function App() {
     const startupProfileId = data.settings.startupProfileId;
     if (!data.loaded || !startupProfileId) {
       startupProfileApplyRef.current = { profileId: null, attempts: 0, pending: false, complete: false };
+      setStartupProfileHoldId(null);
       return;
     }
 
@@ -1139,15 +1149,19 @@ export function App() {
 
     if (startupProfileApplyRef.current.complete) return;
 
-    if (selectedProfileId === startupProfileId) {
+    if (workflowSelectedProfileId === startupProfileId) {
       startupProfileApplyRef.current.pending = false;
       startupProfileApplyRef.current.complete = true;
+      if (Date.now() > wakeScreenStartupResetUntilRef.current) {
+        setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
+      }
       return;
     }
 
     if (startupProfileApplyRef.current.pending) return;
     if (startupProfileApplyRef.current.attempts >= 3) {
       startupProfileApplyRef.current.complete = true;
+      setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
       return;
     }
 
@@ -1158,17 +1172,19 @@ export function App() {
     startupProfileApplyRef.current.attempts += 1;
     startupProfileApplyRef.current.pending = true;
     applyProfile(startupProfile, {
+      optimistic: true,
       commitIf: () => manualProfileSelectionRef.current.version === selectionVersion,
       onDiscardedUpdate: reapplyManualProfileSelection
     })
       .catch((error) => {
+        setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
         setStatus({ type: "error", message: `Could not apply startup profile: ${errorMessage(error)}` });
       })
       .finally(() => {
         startupProfileApplyRef.current.pending = false;
         setStartupApplyTick((tick) => tick + 1);
       });
-  }, [data.loaded, data.settings.startupProfileId, data.profiles, machineSleeping, selectedProfileId, startupApplyTick, reapplyManualProfileSelection]);
+  }, [data.loaded, data.settings.startupProfileId, data.profiles, machineSleeping, workflowSelectedProfileId, startupApplyTick, reapplyManualProfileSelection]);
 
   useEffect(() => {
     if (startupConnectRef.current || !data.loaded || machineSleeping) return;
@@ -1607,16 +1623,23 @@ export function App() {
 
   const applyProfileForBrew = async (profile: ProfileRecord) => {
     manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId: profile.id };
+    setStartupProfileHoldId(null);
     startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
     await applyProfile(profile, { optimistic: true });
     setLastUseAt(Date.now());
   };
 
-  const requestScaleConnection = useCallback(async () => {
+  const requestScaleConnection = useCallback(async (options: { quick?: boolean } = {}) => {
     await wakeMachineIfNeeded(api, data.machineState);
-    await data.refresh();
-    const scannedDevices = await api.scanDevices({ connect: true, quick: false }).catch(() => [] as DeviceInfo[]);
-    const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+    const initialDevices = await api.listDevices().catch(() => data.devices ?? []);
+    if (hasConnectedScale(initialDevices)) {
+      await data.refresh();
+      return { connected: true, requested: false, found: true, scanSawScale: true, firstError: null };
+    }
+
+    const scanOptions = options.quick === undefined ? { connect: true } : { connect: true, quick: options.quick };
+    const scannedDevices = await api.scanDevices(scanOptions).catch(() => [] as DeviceInfo[]);
+    const listedDevices = await api.listDevices().catch(() => initialDevices);
     const devices = uniqueDevices([...scannedDevices, ...listedDevices]);
     const scanSawScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
 
@@ -1637,9 +1660,15 @@ export function App() {
       }
     }
 
-    if (requested) await waitForNativeUpdate(300);
+    let refreshedDevices = devices;
+    if (requested || scanSawScale) {
+      for (const delay of [250, 500]) {
+        await waitForNativeUpdate(delay);
+        refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
+        if (hasConnectedScale(refreshedDevices)) break;
+      }
+    }
     await data.refresh();
-    const refreshedDevices = await api.listDevices().catch(() => [] as DeviceInfo[]);
     return {
       connected: hasConnectedScale(refreshedDevices),
       requested,
@@ -1660,7 +1689,7 @@ export function App() {
     } else {
       resetStartupProfileApply();
     }
-    void requestScaleConnection()
+    void requestScaleConnection({ quick: false })
       .catch(() => undefined)
       .then(() => connectConfiguredStartupDevices())
       .catch(() => undefined)
@@ -1691,7 +1720,7 @@ export function App() {
       .finally(() => {
         scaleReconnectRef.current.pending = false;
       });
-  }, [data.loaded, machineSleeping, nativeDevices, page]);
+  }, [data.loaded, machineSleeping, nativeDevices, page, requestScaleConnection]);
 
   const saveBag = async (bag: Bag) => {
     const bean = await api.createBean({
@@ -1905,15 +1934,16 @@ export function App() {
 
   const sleepMachine = useCallback(async () => {
     setSleepPending(true);
+    setPage("screensaver");
     try {
       await applyScreensaverDisplay();
       await api.sleepMachine();
       await data.refresh();
       await applyScreensaverDisplay();
       setStatus({ type: "success", message: "Machine sleep requested." });
-      setPage("screensaver");
     } catch (error) {
       setStatus({ type: "error", message: `Could not sleep machine: ${errorMessage(error)}` });
+      setPage("brew");
     } finally {
       setSleepPending(false);
     }
@@ -1938,7 +1968,7 @@ export function App() {
     }
     await wakeMachineIfNeeded(api, data.machineState);
     await data.refresh();
-    await requestScaleConnection().catch(() => undefined);
+    await requestScaleConnection({ quick: false }).catch(() => undefined);
     await connectConfiguredStartupDevices();
     await data.refresh();
   };
@@ -2007,6 +2037,21 @@ export function App() {
       await data.refresh();
       setStatus({ type: "success", message: "Scale tared." });
     } catch (error) {
+      skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
+      try {
+        const result = await requestScaleConnection();
+        if (result.connected) {
+          setStatus({ type: "success", message: "Scale connected. Tap Scale again to tare." });
+          return;
+        }
+        if (result.requested || result.found) {
+          setStatus({ type: "success", message: "Scale connection requested. Tap Scale again after it connects." });
+          return;
+        }
+      } catch (connectError) {
+        setStatus({ type: "error", message: `Could not tare or connect scale: ${errorMessage(connectError)}` });
+        return;
+      }
       setStatus({ type: "error", message: `Could not tare scale: ${errorMessage(error)}` });
     }
   };
@@ -2014,7 +2059,7 @@ export function App() {
   const toggleStatusPopover = (nextStatus: TopStatusIndicator) => {
     if (nextStatus.id === "scale") {
       setExpandedStatusId(null);
-      if (nextStatus.connected && hasConnectedScale(nativeDevices)) {
+      if (nextStatus.connected) {
         void tareScaleFromIndicator();
       } else {
         void forceScaleConnection();
@@ -2155,7 +2200,7 @@ export function App() {
         )}
         {page === "brew" && (
           <BrewPage
-            workflow={data.workflow}
+            workflow={displayWorkflow}
             profiles={data.profiles}
             bags={data.bags}
             shots={data.shots}

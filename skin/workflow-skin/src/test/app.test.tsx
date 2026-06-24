@@ -74,7 +74,9 @@ function mockReaFetch(
     shotsListStatus?: number;
     shotIds?: string[];
     workflow?: unknown;
+    workflowUpdateDelay?: (count: number, nextWorkflow: unknown) => Promise<unknown> | undefined;
     workflowUpdateStaleCount?: number;
+    sleepMachineDelay?: Promise<unknown>;
     steams?: unknown[];
     plugins?: unknown[];
     pluginSettings?: unknown;
@@ -251,12 +253,19 @@ function mockReaFetch(
     if (method === "PUT" && url.pathname === "/api/v1/workflow") {
       workflowUpdateCount += 1;
       const nextWorkflow = JSON.parse(String(init.body));
-      if (workflowUpdateCount > (options.workflowUpdateStaleCount ?? 0)) workflow = nextWorkflow;
-      return responseJson(workflow);
+      const updateWorkflow = () => {
+        if (workflowUpdateCount > (options.workflowUpdateStaleCount ?? 0)) workflow = nextWorkflow;
+        return responseJson(workflow);
+      };
+      const delay = options.workflowUpdateDelay?.(workflowUpdateCount, nextWorkflow);
+      return delay ? delay.then(updateWorkflow) : updateWorkflow();
     }
     if (method === "PUT" && url.pathname === "/api/v1/machine/state/sleeping") {
-      machineState = { ...machineState, connected: true, state: { state: "sleeping", substate: "idle" } };
-      return Promise.resolve(new Response("", { status: 200 }));
+      const sleep = () => {
+        machineState = { ...machineState, connected: true, state: { state: "sleeping", substate: "idle" } };
+        return Promise.resolve(new Response("", { status: 200 }));
+      };
+      return options.sleepMachineDelay ? options.sleepMachineDelay.then(sleep) : sleep();
     }
     if (method === "PUT" && url.pathname === "/api/v1/machine/state/idle") {
       machineState = options.machineStateAfterWakeRequest ?? { ...machineState, connected: true, state: { state: "idle" } };
@@ -1391,6 +1400,58 @@ describe("App shell", () => {
     );
   });
 
+  it("keeps the startup preset selected through stale wake refreshes", async () => {
+    let resolveWorkflowUpdate: (() => void) | undefined;
+    const blockedWorkflowUpdate = new Promise<void>((resolve) => {
+      resolveWorkflowUpdate = resolve;
+    });
+    const fetchState = mockReaFetch(
+      {
+        ...initialSettings,
+        startupProfileId: "p2",
+        presetSlots: [
+          { label: "Light", profileId: "p1" },
+          { label: "Sweet", profileId: "p2" },
+          { label: "Turbo" },
+          { label: "Classic" }
+        ]
+      },
+      {
+        workflow: { context: { extras: { workflowSkin: { selectedProfileId: "p2" } } } },
+        workflowUpdateDelay: (count) => (count === 1 ? blockedWorkflowUpdate : undefined),
+        machineState: { connected: true, state: { state: "idle" } },
+        devices: []
+      }
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+    fetchState.setWorkflow({ context: { extras: { workflowSkin: { selectedProfileId: "p1" } } } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBe(1));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Light Blooming" })).not.toHaveAttribute("aria-current");
+
+    resolveWorkflowUpdate?.();
+    await waitFor(() =>
+      expect(fetchState.workflow).toEqual(
+        expect.objectContaining({
+          context: expect.objectContaining({ extras: { workflowSkin: { selectedProfileId: "p2" } } })
+        })
+      )
+    );
+  });
+
   it("auto-connects machine and scale devices on startup when the machine is already awake", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       machineState: { connected: true, state: { state: "idle" } },
@@ -1944,6 +2005,24 @@ describe("App shell", () => {
     expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/display/wakelock", expect.objectContaining({ method: "POST" }));
   });
 
+  it("shows the screensaver immediately while the native sleep request is still pending", async () => {
+    let resolveSleep: (() => void) | undefined;
+    const sleepPending = new Promise<void>((resolve) => {
+      resolveSleep = resolve;
+    });
+    mockReaFetch({ ...initialSettings, keepScreenAwake: true, screensaverBrightness: 8 } as SkinSettings, {
+      sleepMachineDelay: sleepPending
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sleep machine" }));
+
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    expect(screen.getByText("Tap the screen to wake")).toBeInTheDocument();
+
+    resolveSleep?.();
+  });
+
   it("dismisses the screensaver immediately while wake polling is still pending", async () => {
     const fetchState = mockReaFetch(
       { ...initialSettings, keepScreenAwake: true, screensaverBrightness: 8 } as SkinSettings,
@@ -2409,7 +2488,7 @@ describe("App shell", () => {
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connection requested."));
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=true",
       expect.objectContaining({ method: "GET" })
     );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
@@ -2451,6 +2530,23 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(1);
   });
 
+  it("tares the scale from live scale status even when the native device list is stale", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" }, scale: { connected: true } },
+      devices: []
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Connected");
+    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThan(0));
+    const scansBeforeTap = fetchState.scanCount;
+    await userEvent.click(screen.getByRole("button", { name: "Scale" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale tared."));
+    expect(fetchState.scaleTareCount).toBe(1);
+    expect(fetchState.scanCount).toBe(scansBeforeTap);
+  });
+
   it("connects a scale returned only by the scan response", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       devices: [],
@@ -2461,7 +2557,7 @@ describe("App shell", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=true",
       expect.objectContaining({ method: "GET" })
     );
     await waitFor(() => {
@@ -2483,10 +2579,10 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Scale scan requested. Wake the scale if it stays disconnected.");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale scan requested. Wake the scale if it stays disconnected."));
     expect(screen.queryByText(/Could not connect scale/i)).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=true",
       expect.objectContaining({ method: "GET" })
     );
   });
