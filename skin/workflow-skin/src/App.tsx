@@ -295,6 +295,14 @@ function isConnectedDevice(device: DeviceInfo): boolean {
   return ["connected", "ready", "online"].includes(device.state?.trim().toLowerCase() ?? "");
 }
 
+function isMachineDeviceCandidate(device: DeviceInfo): boolean {
+  const label = deviceLabel(device);
+  return (
+    device.type === "machine" ||
+    (!isScaleDeviceCandidate(device) && !isR2Device(device) && (label.includes("machine") || label.includes("de1") || label.includes("decent espresso")))
+  );
+}
+
 function hasConnectedScale(devices: DeviceInfo[]): boolean {
   return devices.some((device) => isScaleDeviceCandidate(device) && isConnectedDevice(device) && !isR2Device(device));
 }
@@ -317,7 +325,7 @@ function isConfiguredR2Device(device: DeviceInfo, configuredR2DeviceId: string |
 function isConnectableStartupDevice(device: DeviceInfo, configuredR2DeviceId: string | undefined): boolean {
   const isScale = isScaleDeviceCandidate(device) && !isR2Device(device);
   const shouldConnectR2 = Boolean(configuredR2DeviceId && (isConfiguredR2Device(device, configuredR2DeviceId) || isR2Device(device)));
-  return (device.type === "machine" || isScale || shouldConnectR2) && !isConnectedDevice(device);
+  return (isMachineDeviceCandidate(device) || isScale || shouldConnectR2) && !isConnectedDevice(device);
 }
 
 function uniqueDevices(devices: DeviceInfo[]): DeviceInfo[] {
@@ -698,6 +706,11 @@ export function App() {
   const reviewShot = completedReviewShot ? mergeReviewShot(completedReviewShot, refreshedCompletedReviewShot) : latestShot;
   const activeProfileWorkflow = profileWorkflowFor(data.settings, workflowPageProfileId);
   const visualizerPlugin = data.plugins?.find((plugin) => plugin.id === "visualizer.reaplugin") ?? null;
+  const topLiveMachine = latestMachineSnapshot(liveTelemetry.measurements);
+  const liveMachineState = topLiveMachine?.state ?? liveTelemetry.machineMode;
+  const machineStateForStatus: MachineState | null = fastMachineState
+    ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
+    : data.machineState ?? (liveMachineState ? { connected: true, state: liveMachineState } : null);
   const shownProfiles = useMemo(
     () => data.profiles.filter((profile) => isProfileShown(data.settings, profile.id)),
     [data.profiles, data.settings.shownProfileIds]
@@ -711,7 +724,7 @@ export function App() {
     );
     return shownProfiles.filter((profile) => !assignedProfileIds.has(profile.id));
   }, [data.settings.presetSlots, editingSlotIndex, shownProfiles]);
-  const machineConnected = Boolean(data.machineState && data.machineState.connected !== false);
+  const machineConnected = Boolean(machineStateForStatus && machineStateForStatus.connected !== false);
   const machineStateForWater: MachineState | null = fastMachineState
     ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
     : data.machineState;
@@ -728,7 +741,7 @@ export function App() {
       buildConnectivityStatuses({
         apiHost: new URL(apiBaseUrl()).hostname,
         appInfo: data.appInfo,
-        machineState: data.machineState,
+        machineState: machineStateForStatus,
         sensors: data.sensors,
         devices: nativeDevices,
         scaleConnected: liveTelemetry.scaleConnected,
@@ -737,7 +750,7 @@ export function App() {
         r2Sensor,
         r2Connected: r2DeviceConnected
       }),
-    [nativeDevices, data.machineState, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
+    [nativeDevices, machineStateForStatus, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
   );
   const visibleMenuIds = useMemo(
     () => visibleMainMenuItems(data.settings).filter((itemId) => itemId !== "live" || brewingCoffee || holdingCompletedBrewOnLivePage),
@@ -749,14 +762,13 @@ export function App() {
       buildTopStatusIndicators({
         statuses,
         indicatorIds: topStatusIndicatorIdsForSettings(data.settings),
-        machineState: data.machineState,
+        machineState: machineStateForStatus,
         liveMeasurements: liveTelemetry.measurements
       }),
-    [statuses, data.settings.topStatusIndicatorIds, data.machineState, liveTelemetry.measurements]
+    [statuses, data.settings.topStatusIndicatorIds, machineStateForStatus, liveTelemetry.measurements]
   );
-  const topLiveMachine = latestMachineSnapshot(liveTelemetry.measurements);
-  const topMachineStatus = machineModeLabel(data.machineState, topLiveMachine);
-  const topMachineTemperature = machineTemperature(data.machineState, topLiveMachine);
+  const topMachineStatus = machineModeLabel(machineStateForStatus, topLiveMachine);
+  const topMachineTemperature = machineTemperature(machineStateForStatus, topLiveMachine);
   const topMachineSummary = `${topMachineStatus}${topMachineTemperature === null ? "" : ` · ${topMachineTemperature.toFixed(1)}°C`}`;
 
   const refreshCommunity = useCallback(async () => {
@@ -1143,13 +1155,6 @@ export function App() {
 
     void connectOnStartup();
   }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, resetStartupProfileApply]);
-
-  useEffect(() => {
-    if (!data.loaded) return;
-    const wasSleeping = wasSleepingRef.current;
-    wasSleepingRef.current = machineSleeping;
-    if (wasSleeping === true && !machineSleeping) resetStartupProfileApply();
-  }, [data.loaded, machineSleeping, resetStartupProfileApply]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver") return;
@@ -1574,7 +1579,7 @@ export function App() {
     setLastUseAt(Date.now());
   };
 
-  const requestScaleConnection = async () => {
+  const requestScaleConnection = useCallback(async () => {
     await wakeMachineIfNeeded(api, data.machineState);
     await data.refresh();
     const scannedDevices = await api.scanDevices({ connect: true, quick: false }).catch(() => [] as DeviceInfo[]);
@@ -1609,7 +1614,23 @@ export function App() {
       scanSawScale,
       firstError
     };
-  };
+  }, [api, data.devices, data.machineState, data.refresh]);
+
+  useEffect(() => {
+    if (!data.loaded) return;
+    const wasSleeping = wasSleepingRef.current;
+    wasSleepingRef.current = machineSleeping;
+    if (wasSleeping !== true || machineSleeping) return;
+
+    resetStartupProfileApply();
+    void requestScaleConnection()
+      .catch(() => undefined)
+      .then(() => connectConfiguredStartupDevices())
+      .catch(() => undefined)
+      .finally(() => {
+        void data.refresh();
+      });
+  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection, resetStartupProfileApply]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -1878,6 +1899,7 @@ export function App() {
     }
     await wakeMachineIfNeeded(api, data.machineState);
     await data.refresh();
+    await requestScaleConnection().catch(() => undefined);
     await connectConfiguredStartupDevices();
     resetStartupProfileApply();
     await data.refresh();
@@ -1939,10 +1961,26 @@ export function App() {
     }
   };
 
+  const tareScaleFromIndicator = async () => {
+    setExpandedStatusId(null);
+    setStatus({ type: "success", message: "Taring scale." });
+    try {
+      await api.tareScale();
+      await data.refresh();
+      setStatus({ type: "success", message: "Scale tared." });
+    } catch (error) {
+      setStatus({ type: "error", message: `Could not tare scale: ${errorMessage(error)}` });
+    }
+  };
+
   const toggleStatusPopover = (nextStatus: TopStatusIndicator) => {
-    if (nextStatus.id === "scale" && !nextStatus.connected) {
+    if (nextStatus.id === "scale") {
       setExpandedStatusId(null);
-      void forceScaleConnection();
+      if (nextStatus.connected) {
+        void tareScaleFromIndicator();
+      } else {
+        void forceScaleConnection();
+      }
       return;
     }
     if (nextStatus.id === "r2" && !nextStatus.connected) {

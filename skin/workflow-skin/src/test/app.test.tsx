@@ -2308,6 +2308,19 @@ describe("App shell", () => {
     );
   });
 
+  it("tares the scale when the connected Scale status is pressed", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected" }]
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale tared."));
+    expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
+    expect(fetchState.scaleTareCount).toBe(1);
+  });
+
   it("connects a scale returned only by the scan response", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       devices: [],
@@ -2394,6 +2407,39 @@ describe("App shell", () => {
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "bookoo-themis" }) })
+    );
+  });
+
+  it("runs a full scale scan after the machine wakes when the quick startup scan misses the scale", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "sleeping", substate: "idle" } },
+      devices: [],
+      scanDevicesResult: ({ quick }) => (quick ? [] : [{ id: "acaia-lunar", name: "Acaia Lunar", type: "scale", state: "discovered" }])
+    });
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchState.scanCount).toBe(0);
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_300);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "acaia-lunar" }) })
     );
   });
 

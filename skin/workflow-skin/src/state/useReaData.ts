@@ -25,6 +25,24 @@ import { defaultSkinSettings, loadSkinSettings, saveSkinSettings, type SkinSetti
 
 const FULL_REFRESH_INTERVAL_MS = 30000;
 
+function shotItemsFromPage(shotPage: ShotRecord[] | { items: ShotRecord[] }): ShotRecord[] {
+  return Array.isArray(shotPage) ? shotPage : shotPage.items;
+}
+
+async function loadShots(api: ReaPrimeApi): Promise<{ items: ShotRecord[]; error: string | null }> {
+  try {
+    const shotPage = await api.listShots({ limit: 100, order: "desc" });
+    return { items: shotItemsFromPage(shotPage), error: null };
+  } catch (error) {
+    const latestShot = await api.getLatestShot().catch(() => null);
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      items: latestShot ? [latestShot] : [],
+      error: `Shot history unavailable: ${message}`
+    };
+  }
+}
+
 export function useReaData(api: ReaPrimeApi) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [workflow, setWorkflow] = useState<Workflow>({});
@@ -55,7 +73,7 @@ export function useReaData(api: ReaPrimeApi) {
         workflowData,
         beanList,
         grinderList,
-        shotPage,
+        shotResult,
         steamList,
         savedSettings,
         sensorList,
@@ -72,7 +90,7 @@ export function useReaData(api: ReaPrimeApi) {
         api.getWorkflow(),
         api.listBeans(),
         api.listGrinders(),
-        api.listShots({ limit: 100, order: "desc" }),
+        loadShots(api),
         api.listSteams().catch(() => [] as SteamRecord[]),
         loadSkinSettings(api),
         api.listSensors().catch(() => [] as SensorListItem[]),
@@ -112,14 +130,13 @@ export function useReaData(api: ReaPrimeApi) {
       setAdvancedMachineSettings(de1AdvancedSettings);
       setMachineCalibration(de1Calibration);
       setMachineState(state);
-      setShots(Array.isArray(shotPage) ? shotPage : shotPage.items);
+      setShots(shotResult.items);
       setSteams(steamList);
       setSettings(savedSettings);
-      setError(null);
+      setError(shotResult.error);
       setLoaded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setMachineState(null);
       setLoaded(true);
     }
   }, [api]);

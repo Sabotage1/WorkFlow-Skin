@@ -9,6 +9,7 @@ function createApi() {
     listBeans: vi.fn().mockResolvedValue([]),
     listGrinders: vi.fn().mockResolvedValue([]),
     listShots: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 }),
+    getLatestShot: vi.fn().mockResolvedValue(null),
     listSteams: vi.fn().mockResolvedValue([]),
     getKv: vi.fn().mockResolvedValue(null),
     putKv: vi.fn().mockResolvedValue(undefined),
@@ -17,6 +18,9 @@ function createApi() {
     getAppInfo: vi.fn().mockResolvedValue(null),
     getMachineState: vi.fn().mockResolvedValue(null),
     getDisplay: vi.fn().mockResolvedValue(null),
+    getMachineSettings: vi.fn().mockResolvedValue(null),
+    getAdvancedMachineSettings: vi.fn().mockResolvedValue(null),
+    getMachineCalibration: vi.fn().mockResolvedValue(null),
     listPlugins: vi.fn().mockResolvedValue([]),
     listBatches: vi.fn().mockResolvedValue([])
   };
@@ -50,5 +54,19 @@ describe("useReaData", () => {
     });
 
     expect(api.listProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps machine data available when shot history fails", async () => {
+    const api = createApi();
+    api.getMachineState.mockResolvedValue({ connected: true, state: { state: "idle" } });
+    api.listShots.mockRejectedValue(new Error('GET /api/v1/shots failed: 500 {"error":"Invalid argument(s): Profile must have a non-empty \\"steps\\" array"}'));
+
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.machineState).toEqual({ connected: true, state: { state: "idle" } });
+    expect(result.current.shots).toEqual([]);
+    expect(result.current.error).toContain("Shot history unavailable");
   });
 });
