@@ -274,6 +274,9 @@ describe("ReaPrimeApi", () => {
       if (method === "PUT" && url.pathname === "/api/v1/devices/connect") {
         return Promise.resolve(new Response("", { status: 200 }));
       }
+      if (method === "GET" && url.pathname === "/api/v1/shots/ids") {
+        return Promise.resolve(new Response(JSON.stringify(["shot-1", "shot-2"]), { status: 200 }));
+      }
       return Promise.reject(new Error(`Unhandled ${method} ${url.pathname}${url.search}`));
     });
     const api = new ReaPrimeApi("http://machine:8080");
@@ -282,6 +285,7 @@ describe("ReaPrimeApi", () => {
     await expect((api as any).listDevices()).resolves.toEqual([{ id: "scale-1", type: "scale", state: "disconnected" }]);
     await expect((api as any).scanDevices({ connect: true, quick: true })).resolves.toEqual([]);
     await expect((api as any).connectDevice("scale-1")).resolves.toBeUndefined();
+    await expect((api as any).listShotIds()).resolves.toEqual(["shot-1", "shot-2"]);
 
     expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/info", expect.objectContaining({ method: "GET" }));
     expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/devices", expect.objectContaining({ method: "GET" }));
@@ -293,6 +297,7 @@ describe("ReaPrimeApi", () => {
       "http://machine:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
     );
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/shots/ids", expect.objectContaining({ method: "GET" }));
   });
 
   it("falls back to alternate device connection payloads", async () => {

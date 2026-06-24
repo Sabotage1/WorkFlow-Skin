@@ -71,6 +71,8 @@ function mockReaFetch(
     sensors?: SensorListItem[];
     sensorsAfterScan?: SensorListItem[];
     shots?: ShotRecord[];
+    shotsListStatus?: number;
+    shotIds?: string[];
     workflow?: unknown;
     workflowUpdateStaleCount?: number;
     steams?: unknown[];
@@ -326,7 +328,15 @@ function mockReaFetch(
       return responseJson(options.batchesByBeanId?.[beanId] ?? []);
     }
     if (method === "GET" && url.pathname === "/api/v1/grinders") return responseJson(grinders);
-    if (method === "GET" && url.pathname === "/api/v1/shots") return responseJson({ items: shots, total: shots.length, limit: 100, offset: 0 });
+    if (method === "GET" && url.pathname === "/api/v1/shots") {
+      if (options.shotsListStatus) {
+        return Promise.resolve(
+          new Response('{"error":"Invalid argument(s): Profile must have a non-empty \\"steps\\" array"}', { status: options.shotsListStatus })
+        );
+      }
+      return responseJson({ items: shots, total: shots.length, limit: 100, offset: 0 });
+    }
+    if (method === "GET" && url.pathname === "/api/v1/shots/ids") return responseJson(options.shotIds ?? shots.map((shot) => shot.id));
     if (method === "GET" && url.pathname === "/api/v1/shots/latest") return responseJson(shots[0] ?? null);
     if (method === "GET" && url.pathname.startsWith("/api/v1/shots/")) {
       const shotId = decodeURIComponent(url.pathname.split("/").pop() ?? "");
@@ -555,6 +565,22 @@ describe("App shell", () => {
     expect(topbar).toHaveTextContent("91.2°C");
     expect(within(topbar).getByRole("button", { name: "WiFi" })).toBeInTheDocument();
     expect(screen.queryByLabelText("App title")).not.toBeInTheDocument();
+  });
+
+  it("does not show bulk shot history backend errors on the brew page", async () => {
+    mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" }, wifi: { connected: true, ipAddress: "192.168.1.20" } },
+      shotsListStatus: 500,
+      shotIds: []
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText(/Shot history unavailable/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Profile must have a non-empty/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Machine" })).toHaveAttribute("title", "Machine: Connected");
   });
 
   it("shows the latest skin version at the bottom of the expanded menu", async () => {

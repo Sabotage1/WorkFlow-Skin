@@ -29,16 +29,40 @@ function shotItemsFromPage(shotPage: ShotRecord[] | { items: ShotRecord[] }): Sh
   return Array.isArray(shotPage) ? shotPage : shotPage.items;
 }
 
+function shotIdFromListItem(value: string | { id?: string; shotId?: string }): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  return value.id?.trim() || value.shotId?.trim() || null;
+}
+
+function sortShotsNewestFirst(shots: ShotRecord[]): ShotRecord[] {
+  return [...shots].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+}
+
+async function loadShotsById(api: ReaPrimeApi): Promise<ShotRecord[]> {
+  const ids = (await api.listShotIds())
+    .map(shotIdFromListItem)
+    .filter((id): id is string => Boolean(id))
+    .slice(0, 100);
+  if (ids.length === 0) return [];
+
+  const results = await Promise.allSettled(ids.map((id) => api.getShot(id)));
+  return sortShotsNewestFirst(
+    results.flatMap((result) => (result.status === "fulfilled" && result.value ? [result.value] : []))
+  );
+}
+
 async function loadShots(api: ReaPrimeApi): Promise<{ items: ShotRecord[]; error: string | null }> {
   try {
     const shotPage = await api.listShots({ limit: 100, order: "desc" });
     return { items: shotItemsFromPage(shotPage), error: null };
-  } catch (error) {
+  } catch {
+    const shotsById = await loadShotsById(api).catch(() => [] as ShotRecord[]);
+    if (shotsById.length > 0) return { items: shotsById, error: null };
+
     const latestShot = await api.getLatestShot().catch(() => null);
-    const message = error instanceof Error ? error.message : String(error);
     return {
       items: latestShot ? [latestShot] : [],
-      error: `Shot history unavailable: ${message}`
+      error: null
     };
   }
 }

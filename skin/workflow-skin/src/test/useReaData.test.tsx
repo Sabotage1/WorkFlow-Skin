@@ -9,6 +9,8 @@ function createApi() {
     listBeans: vi.fn().mockResolvedValue([]),
     listGrinders: vi.fn().mockResolvedValue([]),
     listShots: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 }),
+    listShotIds: vi.fn().mockResolvedValue([]),
+    getShot: vi.fn(),
     getLatestShot: vi.fn().mockResolvedValue(null),
     listSteams: vi.fn().mockResolvedValue([]),
     getKv: vi.fn().mockResolvedValue(null),
@@ -56,7 +58,7 @@ describe("useReaData", () => {
     expect(api.listProfiles).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps machine data available when shot history fails", async () => {
+  it("keeps machine data available without a visible error when shot history fails", async () => {
     const api = createApi();
     api.getMachineState.mockResolvedValue({ connected: true, state: { state: "idle" } });
     api.listShots.mockRejectedValue(new Error('GET /api/v1/shots failed: 500 {"error":"Invalid argument(s): Profile must have a non-empty \\"steps\\" array"}'));
@@ -67,6 +69,24 @@ describe("useReaData", () => {
     expect(result.current.loaded).toBe(true);
     expect(result.current.machineState).toEqual({ connected: true, state: { state: "idle" } });
     expect(result.current.shots).toEqual([]);
-    expect(result.current.error).toContain("Shot history unavailable");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("loads valid shots one by one when the bulk shot history endpoint fails", async () => {
+    const api = createApi();
+    const olderShot = { id: "older", timestamp: "2026-06-22T08:00:00.000Z", workflow: {} };
+    const newerShot = { id: "newer", timestamp: "2026-06-23T08:00:00.000Z", workflow: {} };
+    api.listShots.mockRejectedValue(new Error("bulk shot endpoint failed"));
+    api.listShotIds.mockResolvedValue(["bad", "older", "newer"]);
+    api.getShot.mockImplementation((id: string) => {
+      if (id === "bad") return Promise.reject(new Error("bad shot"));
+      return Promise.resolve(id === "older" ? olderShot : newerShot);
+    });
+
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+
+    expect(result.current.shots.map((shot) => shot.id)).toEqual(["newer", "older"]);
+    expect(result.current.error).toBeNull();
   });
 });

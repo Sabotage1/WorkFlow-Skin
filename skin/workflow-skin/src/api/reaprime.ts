@@ -269,6 +269,10 @@ export class ReaPrimeApi {
     return this.request<ShotPage | ShotRecord[]>(`/api/v1/shots${query ? `?${query}` : ""}`);
   }
 
+  listShotIds() {
+    return this.request<Array<string | { id?: string; shotId?: string }>>("/api/v1/shots/ids");
+  }
+
   getShot(id: string) {
     return this.request<ShotRecord>(`/api/v1/shots/${encodeURIComponent(id)}`);
   }
