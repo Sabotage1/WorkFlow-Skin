@@ -1357,7 +1357,7 @@ describe("App shell", () => {
     );
   });
 
-  it("reconnects devices after waking from screensaver sleep without re-applying the startup profile", async () => {
+  it("re-applies the startup profile and reconnects devices after waking from screensaver sleep", async () => {
     const fetchState = mockReaFetch({
       ...initialSettings,
       startupProfileId: "p2",
@@ -1381,10 +1381,11 @@ describe("App shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
 
     await waitFor(() => expect(fetchState.scanCount).toBeGreaterThan(scansBeforeWake));
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBeGreaterThan(1));
     expect(fetchState.workflow).toEqual(
       expect.objectContaining({
         context: expect.objectContaining({
-          extras: { workflowSkin: { selectedProfileId: "p1" } }
+          extras: { workflowSkin: { selectedProfileId: "p2" } }
         })
       })
     );

@@ -508,6 +508,24 @@ function communityUploadDraftFromShot(shot: ShotRecord, profiles: ProfileRecord[
   };
 }
 
+function workflowForSelectedProfile(workflow: Workflow, profile: ProfileRecord): Workflow {
+  const extras = workflow.context?.extras ?? {};
+  const workflowSkin = extras.workflowSkin && typeof extras.workflowSkin === "object" && !Array.isArray(extras.workflowSkin) ? extras.workflowSkin : {};
+  return {
+    profile: profile.profile,
+    context: {
+      ...workflow.context,
+      extras: {
+        ...extras,
+        workflowSkin: {
+          ...workflowSkin,
+          selectedProfileId: profile.id
+        }
+      }
+    }
+  };
+}
+
 function formatTopNumber(value: number | null | undefined, unit: string): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : "—";
 }
@@ -663,6 +681,7 @@ export function App() {
     pending: false,
     complete: false
   });
+  const manualProfileSelectionRef = useRef<{ version: number; profileId: string | null }>({ version: 0, profileId: null });
   const startupConnectRef = useRef(false);
   const knownLatestShotIdRef = useRef<string | null | undefined>(undefined);
   const idleLatestShotIdRef = useRef<string | null | undefined>(undefined);
@@ -680,6 +699,7 @@ export function App() {
   const lastLoggedPageRef = useRef<Page | null>(null);
   const lastLoggedMachineModeRef = useRef<string | null>(null);
   const wasSleepingRef = useRef<boolean | null>(null);
+  const wakeScreenStartupResetUntilRef = useRef(0);
   const scaleReconnectRef = useRef<{ signature: string | null; lastAttemptAt: number; pending: boolean }>({
     signature: null,
     lastAttemptAt: 0,
@@ -1046,27 +1066,32 @@ export function App() {
     setCommunityInitialDraft(null);
   }, []);
 
-  const applyProfile = async (profile: ProfileRecord, options: { optimistic?: boolean } = {}) => {
-    const extras = data.workflow.context?.extras ?? {};
-    const workflowSkin = extras.workflowSkin && typeof extras.workflowSkin === "object" && !Array.isArray(extras.workflowSkin) ? extras.workflowSkin : {};
-    const nextWorkflow: Workflow = {
-      profile: profile.profile,
-      context: {
-        ...data.workflow.context,
-        extras: {
-          ...extras,
-          workflowSkin: {
-            ...workflowSkin,
-            selectedProfileId: profile.id
-          }
-        }
-      }
-    };
+  const reapplyManualProfileSelection = useCallback(async () => {
+    const manualProfileId = manualProfileSelectionRef.current.profileId;
+    if (!manualProfileId) return;
+
+    const manualProfile = data.profiles.find((profile) => profile.id === manualProfileId);
+    if (!manualProfile) return;
+
+    const nextWorkflow = workflowForSelectedProfile(data.workflow, manualProfile);
+    const updatedWorkflow = await api.updateWorkflow(nextWorkflow);
+    data.setWorkflow(updatedWorkflow);
+  }, [api, data.profiles, data.workflow, data.setWorkflow]);
+
+  const applyProfile = async (
+    profile: ProfileRecord,
+    options: { optimistic?: boolean; commitIf?: () => boolean; onDiscardedUpdate?: () => Promise<void> | void } = {}
+  ) => {
+    const nextWorkflow = workflowForSelectedProfile(data.workflow, profile);
     const previousWorkflow = data.workflow;
     if (options.optimistic) data.setWorkflow(nextWorkflow);
 
     try {
       const updatedWorkflow = await api.updateWorkflow(nextWorkflow);
+      if (options.commitIf && !options.commitIf()) {
+        await options.onDiscardedUpdate?.();
+        return;
+      }
       data.setWorkflow(updatedWorkflow);
     } catch (error) {
       if (options.optimistic) data.setWorkflow(previousWorkflow);
@@ -1129,15 +1154,21 @@ export function App() {
     const startupProfile = data.profiles.find((profile) => profile.id === startupProfileId);
     if (!startupProfile) return;
 
+    const selectionVersion = manualProfileSelectionRef.current.version;
     startupProfileApplyRef.current.attempts += 1;
     startupProfileApplyRef.current.pending = true;
-    applyProfile(startupProfile).catch((error) => {
-      setStatus({ type: "error", message: `Could not apply startup profile: ${errorMessage(error)}` });
-    }).finally(() => {
-      startupProfileApplyRef.current.pending = false;
-      setStartupApplyTick((tick) => tick + 1);
-    });
-  }, [data.loaded, data.settings.startupProfileId, data.profiles, machineSleeping, selectedProfileId, startupApplyTick]);
+    applyProfile(startupProfile, {
+      commitIf: () => manualProfileSelectionRef.current.version === selectionVersion,
+      onDiscardedUpdate: reapplyManualProfileSelection
+    })
+      .catch((error) => {
+        setStatus({ type: "error", message: `Could not apply startup profile: ${errorMessage(error)}` });
+      })
+      .finally(() => {
+        startupProfileApplyRef.current.pending = false;
+        setStartupApplyTick((tick) => tick + 1);
+      });
+  }, [data.loaded, data.settings.startupProfileId, data.profiles, machineSleeping, selectedProfileId, startupApplyTick, reapplyManualProfileSelection]);
 
   useEffect(() => {
     if (startupConnectRef.current || !data.loaded || machineSleeping) return;
@@ -1575,6 +1606,7 @@ export function App() {
   };
 
   const applyProfileForBrew = async (profile: ProfileRecord) => {
+    manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId: profile.id };
     startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
     await applyProfile(profile, { optimistic: true });
     setLastUseAt(Date.now());
@@ -1623,6 +1655,11 @@ export function App() {
     wasSleepingRef.current = machineSleeping;
     if (wasSleeping !== true || machineSleeping) return;
 
+    if (Date.now() <= wakeScreenStartupResetUntilRef.current) {
+      wakeScreenStartupResetUntilRef.current = 0;
+    } else {
+      resetStartupProfileApply();
+    }
     void requestScaleConnection()
       .catch(() => undefined)
       .then(() => connectConfiguredStartupDevices())
@@ -1630,7 +1667,7 @@ export function App() {
       .finally(() => {
         void data.refresh();
       });
-  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection]);
+  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection, resetStartupProfileApply]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -1892,6 +1929,8 @@ export function App() {
     lastUseAtRef.current = now;
     lastUseStateAtRef.current = now;
     setLastUseAt(now);
+    resetStartupProfileApply();
+    wakeScreenStartupResetUntilRef.current = now + 15_000;
     setPage("brew");
     await api.setDisplayBrightness(100).catch(() => undefined);
     if (data.settings.keepScreenAwake !== false) {
