@@ -1,4 +1,5 @@
 import type { ShotSnapshot } from "../api/types";
+import { shotGraphMeasurements } from "../lib/shotWindow";
 
 type SeriesKey = "pressure" | "flow" | "targetPressure" | "targetFlow" | "groupTemperature" | "targetTemperature" | "weightFlow";
 
@@ -78,8 +79,6 @@ const SERIES_DEFINITIONS: SeriesDefinition[] = [
   }
 ];
 
-const BREW_SUBSTATES = new Set(["preinfusion", "pouring"]);
-
 function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -102,36 +101,13 @@ function preferredTimestampMs(measurement: ShotSnapshot): number | null {
   return machineTimestampMs(measurement) ?? scaleTimestampMs(measurement);
 }
 
-function brewSubstate(measurement: ShotSnapshot): string | null {
-  const value = measurement.machine?.state?.substate;
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
-}
-
-function graphMeasurements(measurements: ShotSnapshot[]): ShotSnapshot[] {
-  const brewingSamples = measurements.filter((measurement) => {
-    const substate = brewSubstate(measurement);
-    return substate !== null && BREW_SUBSTATES.has(substate);
-  });
-  if (brewingSamples.length > 0) return brewingSamples;
-
-  const activeSamples = measurements.filter(activeBrewSample);
-  return activeSamples.length > 1 ? activeSamples : measurements;
-}
-
-function activeBrewSample(measurement: ShotSnapshot): boolean {
-  const pressure = numeric(measurement.machine?.pressure) ?? 0;
-  const flow = numeric(measurement.machine?.flow) ?? 0;
-  const weightFlow = numeric(measurement.scale?.weightFlow) ?? 0;
-  return pressure > 1.5 || flow > 0.2 || Math.abs(weightFlow) > 0.2;
-}
-
 function elapsedSecondsFromTimestamp(time: number | null, index: number, startTime: number | null): number {
   if (time !== null && startTime !== null) return Math.max(0, (time - startTime) / 1000);
   return index * 0.5;
 }
 
 function chartSeries(measurements: ShotSnapshot[]): ChartSeries[] {
-  const visibleMeasurements = graphMeasurements(measurements);
+  const visibleMeasurements = shotGraphMeasurements(measurements);
   const startTime = visibleMeasurements.map(preferredTimestampMs).find((value): value is number => value !== null) ?? null;
 
   return SERIES_DEFINITIONS.map((definition) => {

@@ -1,4 +1,5 @@
 import type { ShotRecord, ShotSnapshot, WorkflowContext } from "../api/types";
+import { shotGraphMeasurements, shotWindowDurationSeconds } from "./shotWindow";
 
 function average(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -12,16 +13,12 @@ export function shotContext(shot: ShotRecord): WorkflowContext | undefined {
 }
 
 export function shotStats(shot: ShotRecord) {
-  const measurements = shot.measurements ?? [];
-  const timestamps = measurements
-    .map((sample) => sample.machine?.timestamp)
-    .filter((value): value is string => Boolean(value))
-    .map((value) => new Date(value).getTime())
-    .filter(Number.isFinite);
-  const durationSeconds = timestamps.length >= 2 ? Math.round((timestamps[timestamps.length - 1] - timestamps[0]) / 1000) : null;
+  const rawMeasurements = shot.measurements ?? [];
+  const measurements = shotGraphMeasurements(rawMeasurements);
+  const durationSeconds = shotWindowDurationSeconds(rawMeasurements);
   const pressures = measurements.map((sample) => sample.machine?.pressure).filter((value): value is number => typeof value === "number");
   const flows = measurements.map((sample) => sample.machine?.flow).filter((value): value is number => typeof value === "number");
-  const weights = measurements.map((sample) => sample.scale?.weight).filter((value): value is number => typeof value === "number" && value > 0);
+  const weights = rawMeasurements.map((sample) => sample.scale?.weight).filter((value): value is number => typeof value === "number" && value > 0);
   return {
     durationSeconds,
     peakPressure: pressures.length ? Math.max(...pressures) : null,

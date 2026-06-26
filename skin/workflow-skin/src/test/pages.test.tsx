@@ -257,6 +257,24 @@ describe("LivePage", () => {
     expect(screen.getByLabelText("Shot Timer: 1 s")).toBeInTheDocument();
     expect(screen.getByLabelText("Weight: 30.00 g")).toBeInTheDocument();
   });
+
+  it("uses the live graph timestamp duration when the scale timer has drifted longer", () => {
+    render(
+      <LivePage
+        workflow={{ context: { targetDoseWeight: 18, targetYield: 36 } }}
+        latestShot={null}
+        liveMeasurements={[
+          { machine: { timestamp: "2026-06-11T10:00:00.000Z", pressure: 11 }, scale: { timestamp: "2026-06-11T10:00:00.000Z", weight: 0 } },
+          { machine: { timestamp: "2026-06-11T10:00:03.000Z", pressure: 1 }, scale: { timestamp: "2026-06-11T10:00:03.000Z", weight: 1 } },
+          { machine: { timestamp: "2026-06-11T10:00:19.200Z", pressure: 8 }, scale: { timestamp: "2026-06-11T10:00:19.200Z", weight: 36 } }
+        ]}
+        scaleSnapshot={{ weight: 36, weightFlow: 0, timerValue: 18_500 }}
+      />
+    );
+
+    expect(screen.getByLabelText("Shot Timer: 16 s")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Shot Timer: 19 s")).not.toBeInTheDocument();
+  });
 });
 
 describe("BagsPage", () => {

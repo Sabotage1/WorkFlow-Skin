@@ -13,6 +13,7 @@ let profiles: ProfileRecord[] = [
 ];
 
 type DeviceScanContext = { machineState: MachineState; quick: boolean; scanCount: number; connectCount: number };
+type DeviceScanRequest = { path: string; quick: boolean; connect: boolean };
 
 const communityRecommendation: CommunityRecommendation = {
   id: "rec-12345678",
@@ -129,6 +130,7 @@ function mockReaFetch(
   let grinders = options.grinders ?? [];
   let scanCount = 0;
   let connectCount = 0;
+  const scanRequests: DeviceScanRequest[] = [];
   let sensorExecuteCount = 0;
   let scaleTareCount = 0;
   const communityDownloadIds: string[] = [];
@@ -307,6 +309,7 @@ function mockReaFetch(
     if (method === "GET" && url.pathname === "/api/v1/devices") return responseJson(devices);
     if (method === "GET" && url.pathname === "/api/v1/devices/scan") {
       const quick = url.searchParams.get("quick") === "true";
+      scanRequests.push({ path: `${url.pathname}${url.search}`, quick, connect: url.searchParams.get("connect") === "true" });
       const context = { machineState, quick, scanCount, connectCount };
       scanCount += 1;
       devices = typeof options.devicesAfterScan === "function" ? options.devicesAfterScan(context) : options.devicesAfterScan ?? devices;
@@ -425,6 +428,9 @@ function mockReaFetch(
     },
     get scanCount() {
       return scanCount;
+    },
+    get scanRequests() {
+      return scanRequests;
     },
     get connectCount() {
       return connectCount;
@@ -1495,6 +1501,49 @@ describe("App shell", () => {
         expect.objectContaining({ method: "GET" })
       );
     });
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
+    );
+  });
+
+  it("uses the startup device recovery sequence after waking from sleep", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
+      {
+        machineState: { connected: true, state: { state: "sleeping", substate: "idle" } },
+        devices: [],
+        scanDevicesResult: ({ quick }) =>
+          quick
+            ? [{ id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" }]
+            : [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }]
+      }
+    );
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchState.scanRequests).toEqual([]);
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_300);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchState.scanRequests.map((request) => request.path)).toEqual([
+      "/api/v1/devices/scan?connect=true&quick=true",
+      "/api/v1/devices/scan?connect=true&quick=false"
+    ]);
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
+    );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
@@ -2697,29 +2746,57 @@ describe("App shell", () => {
   });
 
   it("shows a refill screen when the tank is at the refill level", async () => {
+    vi.useFakeTimers();
     mockReaFetch(initialSettings, {
       machineState: { connected: true, waterLevels: { currentLevel: 9, refillLevel: 15 } }
     });
     render(<App />);
 
-    const dialog = await screen.findByRole("dialog", { name: "Water refill needed" });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Water" })).toHaveAttribute("title", "Water: Low 9mm · 15%");
+    expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4999);
+    });
+    expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    const dialog = screen.getByRole("dialog", { name: "Water refill needed" });
 
     expect(within(dialog).getByText("Hi, I’m getting dry over here… Top me up would ya’?")).toBeInTheDocument();
     expect(within(dialog).getByRole("img", { name: "Water pitcher filling the tank" })).toBeInTheDocument();
     expect(within(dialog).getByText("Water is at 9mm. Refill threshold is 15mm.")).toBeInTheDocument();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "OK" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "OK" }));
 
     expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
   });
 
   it("shows a refill screen when the machine reports refill required", async () => {
+    vi.useFakeTimers();
     mockReaFetch(initialSettings, {
       machineState: { connected: true, state: { state: "RefillRequired" } }
     });
     render(<App />);
 
-    const dialog = await screen.findByRole("dialog", { name: "Water refill needed" });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Refill");
+    expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    const dialog = screen.getByRole("dialog", { name: "Water refill needed" });
 
     expect(within(dialog).getByText("The machine is asking for a refill.")).toBeInTheDocument();
   });

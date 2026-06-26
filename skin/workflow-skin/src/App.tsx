@@ -103,6 +103,7 @@ const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
 const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
+const WATER_REFILL_POPUP_DELAY_MS = 5000;
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
@@ -393,7 +394,6 @@ async function wakeMachineIfNeeded(api: ReaPrimeApi, fallbackMachineState: Machi
   if (!isSleepingMachine(latestState)) return latestState;
 
   await api.wakeMachine().catch(() => undefined);
-  void scanScaleDuringMachineWake(api);
 
   let nextState: MachineState | null = latestState;
   for (const delay of [250, 750, 1500]) {
@@ -403,14 +403,6 @@ async function wakeMachineIfNeeded(api: ReaPrimeApi, fallbackMachineState: Machi
   }
 
   return nextState;
-}
-
-async function scanScaleDuringMachineWake(api: ReaPrimeApi): Promise<void> {
-  const scannedDevices = await api.scanDevices({ connect: true, quick: false }).catch(() => [] as DeviceInfo[]);
-  const scaleDevices = scannedDevices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
-  for (const device of scaleDevices) {
-    await api.connectDevice(device.id).catch(() => undefined);
-  }
 }
 
 function autoSleepCheckIntervalMs(idleLimitMs: number): number {
@@ -666,6 +658,7 @@ export function App() {
   const [lastCompletedProfileId, setLastCompletedProfileId] = useState<string | undefined>();
   const [fastMachineState, setFastMachineState] = useState<MachineState | null>(null);
   const [waterRefillAcknowledged, setWaterRefillAcknowledged] = useState(false);
+  const [waterRefillVisible, setWaterRefillVisible] = useState(false);
   const [completedReviewShot, setCompletedReviewShot] = useState<ShotRecord | null>(null);
   const [communityRecommendations, setCommunityRecommendations] = useState<CommunityRecommendation[]>([]);
   const [communityError, setCommunityError] = useState<string | null>(null);
@@ -684,6 +677,7 @@ export function App() {
   });
   const manualProfileSelectionRef = useRef<{ version: number; profileId: string | null }>({ version: 0, profileId: null });
   const startupConnectRef = useRef(false);
+  const startupRecoveryRef = useRef<Promise<void> | null>(null);
   const knownLatestShotIdRef = useRef<string | null | undefined>(undefined);
   const idleLatestShotIdRef = useRef<string | null | undefined>(undefined);
   const autoReadR2ShotIdRef = useRef<string | null>(null);
@@ -1130,8 +1124,34 @@ export function App() {
     };
 
     await connectStartupDevices(true);
-    if (data.settings.r2SensorId) await connectStartupDevices(false);
+    await connectStartupDevices(false);
   }, [api, data.devices, data.settings.r2SensorId]);
+
+  const runStartupRecovery = useCallback(
+    (options: { resetStartupProfile?: boolean; manualSelectionVersion?: number } = {}) => {
+      if (startupRecoveryRef.current) return startupRecoveryRef.current;
+      const manualSelectionVersion = options.manualSelectionVersion ?? manualProfileSelectionRef.current.version;
+
+      let recovery: Promise<void>;
+      recovery = (async () => {
+        await data.refresh();
+        await connectConfiguredStartupDevices();
+        await data.refresh();
+        if (options.resetStartupProfile !== false && manualProfileSelectionRef.current.version === manualSelectionVersion) {
+          resetStartupProfileApply();
+        }
+        window.setTimeout(() => {
+          void data.refresh();
+        }, 1500);
+      })().finally(() => {
+        if (startupRecoveryRef.current === recovery) startupRecoveryRef.current = null;
+      });
+
+      startupRecoveryRef.current = recovery;
+      return recovery;
+    },
+    [connectConfiguredStartupDevices, data.refresh, resetStartupProfileApply]
+  );
 
   useEffect(() => {
     const startupProfileId = data.settings.startupProfileId;
@@ -1190,18 +1210,8 @@ export function App() {
     if (startupConnectRef.current || !data.loaded || machineSleeping) return;
     startupConnectRef.current = true;
 
-    const connectOnStartup = async () => {
-      await data.refresh();
-      await connectConfiguredStartupDevices();
-      await data.refresh();
-      resetStartupProfileApply();
-      window.setTimeout(() => {
-        void data.refresh();
-      }, 1500);
-    };
-
-    void connectOnStartup();
-  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, resetStartupProfileApply]);
+    void runStartupRecovery();
+  }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver") return;
@@ -1428,8 +1438,27 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!waterLow) setWaterRefillAcknowledged(false);
-  }, [waterLow]);
+    if (!waterLow) {
+      setWaterRefillAcknowledged(false);
+      setWaterRefillVisible(false);
+      return;
+    }
+
+    if (waterRefillAcknowledged || waterRefillVisible) return;
+
+    const timer = window.setTimeout(() => {
+      setWaterRefillVisible(true);
+    }, WATER_REFILL_POPUP_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [waterLow, waterRefillAcknowledged, waterRefillVisible]);
+
+  const confirmWaterRefill = () => {
+    setWaterRefillAcknowledged(true);
+    setWaterRefillVisible(false);
+  };
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -1686,17 +1715,11 @@ export function App() {
 
     if (Date.now() <= wakeScreenStartupResetUntilRef.current) {
       wakeScreenStartupResetUntilRef.current = 0;
-    } else {
-      resetStartupProfileApply();
+      return;
     }
-    void requestScaleConnection({ quick: false })
-      .catch(() => undefined)
-      .then(() => connectConfiguredStartupDevices())
-      .catch(() => undefined)
-      .finally(() => {
-        void data.refresh();
-      });
-  }, [connectConfiguredStartupDevices, data.loaded, data.refresh, machineSleeping, requestScaleConnection, resetStartupProfileApply]);
+
+    void runStartupRecovery().catch(() => undefined);
+  }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -1955,11 +1978,11 @@ export function App() {
 
   const wakeScreen = async () => {
     const now = Date.now();
+    const manualSelectionVersion = manualProfileSelectionRef.current.version;
     autoSleepPendingRef.current = false;
     lastUseAtRef.current = now;
     lastUseStateAtRef.current = now;
     setLastUseAt(now);
-    resetStartupProfileApply();
     wakeScreenStartupResetUntilRef.current = now + 15_000;
     setPage("brew");
     await api.setDisplayBrightness(100).catch(() => undefined);
@@ -1967,10 +1990,7 @@ export function App() {
       await api.requestWakeLock().catch(() => undefined);
     }
     await wakeMachineIfNeeded(api, data.machineState);
-    await data.refresh();
-    await requestScaleConnection({ quick: false }).catch(() => undefined);
-    await connectConfiguredStartupDevices();
-    await data.refresh();
+    await runStartupRecovery({ manualSelectionVersion });
   };
 
   useEffect(() => {
@@ -2113,7 +2133,7 @@ export function App() {
 
   return (
     <main className={data.settings.menuCollapsed ? "app-shell menu-collapsed" : "app-shell"} style={shellStyle}>
-      {waterLow && !waterRefillAcknowledged && <WaterRefillOverlay detail={waterLowDetail} onConfirm={() => setWaterRefillAcknowledged(true)} />}
+      {waterLow && waterRefillVisible && !waterRefillAcknowledged && <WaterRefillOverlay detail={waterLowDetail} onConfirm={confirmWaterRefill} />}
       <TopStatusBar
         indicators={topStatusIndicators}
         expandedStatusId={expandedStatusId}

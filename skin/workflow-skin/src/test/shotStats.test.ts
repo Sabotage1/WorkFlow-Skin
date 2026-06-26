@@ -16,6 +16,34 @@ describe("shotStats", () => {
     expect(shotStats(shot)).toMatchObject({ durationSeconds: 10, peakPressure: 9, averageFlow: 1.5, finalYield: 36 });
   });
 
+  it("uses the graph-visible brew window for duration instead of idle samples", () => {
+    const shot: ShotRecord = {
+      id: "s1",
+      timestamp: "2026-06-09T10:00:00Z",
+      workflow: {},
+      measurements: [
+        {
+          machine: { timestamp: "2026-06-09T10:00:00.000Z", pressure: 0.1, flow: 0, state: { state: "idle", substate: "idle" } },
+          scale: { timestamp: "2026-06-09T10:00:00.000Z", weightFlow: 0, weight: 0 }
+        },
+        {
+          machine: { timestamp: "2026-06-09T10:00:03.000Z", pressure: 1, flow: 0.1, state: { state: "espresso", substate: "preinfusion" } },
+          scale: { timestamp: "2026-06-09T10:00:03.000Z", weightFlow: 0.1, weight: 1 }
+        },
+        {
+          machine: { timestamp: "2026-06-09T10:00:19.200Z", pressure: 8, flow: 1.8, state: { state: "espresso", substate: "pouring" } },
+          scale: { timestamp: "2026-06-09T10:00:19.200Z", weightFlow: 1.2, weight: 36 }
+        },
+        {
+          machine: { timestamp: "2026-06-09T10:00:25.000Z", pressure: 0.1, flow: 0, state: { state: "idle", substate: "idle" } },
+          scale: { timestamp: "2026-06-09T10:00:25.000Z", weightFlow: 0, weight: 36.2 }
+        }
+      ]
+    };
+
+    expect(shotStats(shot)).toMatchObject({ durationSeconds: 16.2, peakPressure: 8, finalYield: 36.2 });
+  });
+
   it("ignores invalid timestamps when calculating duration", () => {
     const shot: ShotRecord = {
       id: "s1",

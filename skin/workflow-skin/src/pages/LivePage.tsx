@@ -130,7 +130,7 @@ export function LivePage({
   const stats = latestShot ? shotStats({ ...latestShot, measurements }) : shotStats({ id: "live", timestamp: new Date().toISOString(), workflow, measurements });
   const latest = latestMeasurement(measurements);
   const weight = liveWeight(measurements, scaleSnapshot) ?? stats.finalYield;
-  const time = scaleTimerSeconds(scaleSnapshot) ?? stats.durationSeconds;
+  const time = stats.durationSeconds ?? scaleTimerSeconds(scaleSnapshot);
   const pressure = latest?.machine?.pressure ?? stats.averagePressure;
   const flow = liveFlow(measurements, scaleSnapshot) ?? stats.averageFlow;
   const waitingForData = measurements.length === 0 && !scaleSnapshot;
