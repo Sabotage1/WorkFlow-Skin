@@ -104,6 +104,7 @@ const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 5000;
+const DEVICE_DISCOVERY_SEQUENCE: readonly boolean[] = [true, false];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
@@ -1123,8 +1124,9 @@ export function App() {
       }
     };
 
-    await connectStartupDevices(true);
-    await connectStartupDevices(false);
+    for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
+      await connectStartupDevices(quick);
+    }
   }, [api, data.devices, data.settings.r2SensorId]);
 
   const runStartupRecovery = useCallback(
@@ -1555,16 +1557,18 @@ export function App() {
       await wakeMachineIfNeeded(api, data.machineState);
       await data.refresh();
       const collectR2Devices = async (knownDevices: DeviceInfo[] = []) => {
-        const scannedDevices = await api.scanDevices({ connect: true, quick: false }).catch(() => [] as DeviceInfo[]);
-        const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
-        return uniqueDevices([...knownDevices, ...scannedDevices, ...listedDevices]).filter(
-          (item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId)
-        );
+        let devices = knownDevices;
+        for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
+          const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
+          const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+          devices = uniqueDevices([...devices, ...scannedDevices, ...listedDevices]);
+        }
+        return devices.filter((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
       };
       const attemptedDeviceIds = new Set<string>();
       const connectR2Devices = async (devices: DeviceInfo[], retryAttempted = false) => {
         let attempted = false;
-        for (const device of devices.filter((item) => !isConnectedDevice(item))) {
+        for (const device of devices) {
           if (!retryAttempted && attemptedDeviceIds.has(device.id)) continue;
           attemptedDeviceIds.add(device.id);
           attempted = true;
@@ -1589,6 +1593,9 @@ export function App() {
         return;
       }
 
+      if (!r2Devices.some((device) => device.id === sensorId && isConnectedDevice(device))) {
+        await api.connectDevice(sensorId).catch(() => undefined);
+      }
       await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
       await data.refresh();
       setStatus({ type: "success", message: `R2 connected through ReaPrime: ${sensorId}.` });
@@ -1666,42 +1673,54 @@ export function App() {
       return { connected: true, requested: false, found: true, scanSawScale: true, firstError: null };
     }
 
-    const scanOptions = options.quick === undefined ? { connect: true } : { connect: true, quick: options.quick };
-    const scannedDevices = await api.scanDevices(scanOptions).catch(() => [] as DeviceInfo[]);
-    const listedDevices = await api.listDevices().catch(() => initialDevices);
-    const devices = uniqueDevices([...scannedDevices, ...listedDevices]);
-    const scanSawScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-
-    if (hasConnectedScale(devices)) {
-      await data.refresh();
-      return { connected: true, requested: false, found: true, scanSawScale, firstError: null };
-    }
-
-    const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
     let requested = false;
+    let found = false;
+    let scanSawScale = false;
     let firstError: unknown = null;
-    for (const device of scaleDevices) {
-      try {
-        await api.connectDevice(device.id);
-        requested = true;
-      } catch (error) {
-        firstError ??= error;
+    let refreshedDevices = initialDevices;
+    const scanSequence = options.quick === undefined ? DEVICE_DISCOVERY_SEQUENCE : [options.quick];
+
+    for (const quick of scanSequence) {
+      const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
+      const listedDevices = await api.listDevices().catch(() => refreshedDevices);
+      const devices = uniqueDevices([...refreshedDevices, ...scannedDevices, ...listedDevices]);
+      const scanFoundScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+      scanSawScale = scanSawScale || scanFoundScale;
+
+      if (hasConnectedScale(devices)) {
+        await data.refresh();
+        return { connected: true, requested, found: true, scanSawScale, firstError };
+      }
+
+      const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
+      found = found || scanFoundScale || scaleDevices.length > 0;
+      for (const device of scaleDevices) {
+        try {
+          await api.connectDevice(device.id);
+          requested = true;
+        } catch (error) {
+          firstError ??= error;
+        }
+      }
+
+      refreshedDevices = devices;
+      if (scaleDevices.length > 0 || scanFoundScale) {
+        for (const delay of [250, 500]) {
+          await waitForNativeUpdate(delay);
+          refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
+          if (hasConnectedScale(refreshedDevices)) {
+            await data.refresh();
+            return { connected: true, requested, found: true, scanSawScale, firstError };
+          }
+        }
       }
     }
 
-    let refreshedDevices = devices;
-    if (requested || scanSawScale) {
-      for (const delay of [250, 500]) {
-        await waitForNativeUpdate(delay);
-        refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
-        if (hasConnectedScale(refreshedDevices)) break;
-      }
-    }
     await data.refresh();
     return {
       connected: hasConnectedScale(refreshedDevices),
       requested,
-      found: scanSawScale || scaleDevices.length > 0,
+      found,
       scanSawScale,
       firstError
     };
@@ -2086,9 +2105,9 @@ export function App() {
       }
       return;
     }
-    if (nextStatus.id === "r2" && !nextStatus.connected) {
+    if (nextStatus.id === "r2") {
       setExpandedStatusId(null);
-      void refreshR2Sensor();
+      if (!r2RefreshBusy) void refreshR2Sensor();
       return;
     }
     setExpandedStatusId((current) => (current === nextStatus.id ? null : nextStatus.id));
