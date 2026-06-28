@@ -132,6 +132,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function sleepFailureStatusMessage(error: unknown): string {
+  const message = errorMessage(error).toLowerCase();
+  if (message.includes("devicenotconnected") || message.includes("machine not connected") || message.includes("not connected")) {
+    return "Screensaver is on. The machine was already disconnected, so the sleep command was skipped.";
+  }
+  return "Screensaver is on. The machine did not confirm sleep.";
+}
+
 function versionLabel(value: string | null | undefined): string {
   const clean = value?.trim().replace(/^v/i, "");
   return clean ? `v${clean}` : "Version unknown";
@@ -1984,8 +1992,8 @@ export function App() {
       await applyScreensaverDisplay();
       setStatus({ type: "success", message: "Machine sleep requested." });
     } catch (error) {
-      setStatus({ type: "error", message: `Could not sleep machine: ${errorMessage(error)}` });
-      setPage("brew");
+      skinLog("machine_sleep_request_failed", { error: errorMessage(error) });
+      setStatus({ type: "success", message: sleepFailureStatusMessage(error) });
     } finally {
       setSleepPending(false);
     }

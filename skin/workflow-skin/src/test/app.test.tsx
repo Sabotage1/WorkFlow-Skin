@@ -78,6 +78,8 @@ function mockReaFetch(
     workflowUpdateDelay?: (count: number, nextWorkflow: unknown) => Promise<unknown> | undefined;
     workflowUpdateStaleCount?: number;
     sleepMachineDelay?: Promise<unknown>;
+    sleepMachineStatus?: number;
+    sleepMachineBody?: string;
     steams?: unknown[];
     plugins?: unknown[];
     pluginSettings?: unknown;
@@ -263,6 +265,9 @@ function mockReaFetch(
       return delay ? delay.then(updateWorkflow) : updateWorkflow();
     }
     if (method === "PUT" && url.pathname === "/api/v1/machine/state/sleeping") {
+      if (options.sleepMachineStatus) {
+        return Promise.resolve(new Response(options.sleepMachineBody ?? "sleep failed", { status: options.sleepMachineStatus }));
+      }
       const sleep = () => {
         machineState = { ...machineState, connected: true, state: { state: "sleeping", substate: "idle" } };
         return Promise.resolve(new Response("", { status: 200 }));
@@ -2071,6 +2076,47 @@ describe("App shell", () => {
     expect(screen.getByText("Tap the screen to wake")).toBeInTheDocument();
 
     resolveSleep?.();
+  });
+
+  it("keeps the screensaver visible when the native sleep request fails because the machine is disconnected", async () => {
+    const fetchState = mockReaFetch({ ...initialSettings, keepScreenAwake: true, screensaverBrightness: 8 } as SkinSettings, {
+      sleepMachineStatus: 500,
+      sleepMachineBody:
+        '{"error":"DeviceNotConnectedException: machine not connected\\n#0 De1Controller.connectedDe1 (package:reaprime/src/controllers/de1_controller.dart:230)"}'
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sleep machine" }));
+
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/De1Controller\.connectedDe1/i)).not.toBeInTheDocument();
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/display/brightness",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ brightness: 8 }) })
+    );
+  });
+
+  it("does not loop auto sleep requests after the native sleep endpoint fails", async () => {
+    const fetchState = mockReaFetch(
+      { ...initialSettings, autoSleepMinutes: 0.001, screensaverBrightness: 8 },
+      {
+        machineState: { connected: true, state: { state: "idle" }, wifi: { connected: true, ipAddress: "192.168.1.20" } },
+        sleepMachineStatus: 500,
+        sleepMachineBody: '{"error":"DeviceNotConnectedException: machine not connected"}'
+      }
+    );
+    render(<App />);
+
+    expect(await screen.findByText("Tap the screen to wake", {}, { timeout: 1500 })).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    const laterSleepCalls = fetchState.fetchMock.mock.calls.filter(
+      ([input, init]) => String(input) === "http://localhost:8080/api/v1/machine/state/sleeping" && init?.method === "PUT"
+    ).length;
+    expect(laterSleepCalls).toBe(1);
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
   });
 
   it("dismisses the screensaver immediately while wake polling is still pending", async () => {
