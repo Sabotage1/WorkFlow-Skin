@@ -1569,12 +1569,20 @@ export function App() {
     await persistSettings({ ...data.settings, shownProfileIds }, "Profile visibility saved.");
   };
 
-  const refreshR2Sensor = async () => {
+  const refreshR2Sensor = async (options: { forceConfiguredConnect?: boolean } = {}) => {
     setR2RefreshBusy(true);
     setStatus({ type: "success", message: "Looking for DiFluid R2." });
     try {
       await wakeMachineIfNeeded(api, data.machineState);
       await data.refresh();
+      const attemptedDeviceIds = new Set<string>();
+      const connectR2Device = async (deviceId: string | undefined, retryAttempted = false) => {
+        if (!deviceId) return false;
+        if (!retryAttempted && attemptedDeviceIds.has(deviceId)) return false;
+        attemptedDeviceIds.add(deviceId);
+        await api.connectDevice(deviceId).catch(() => undefined);
+        return true;
+      };
       const collectR2Devices = async (knownDevices: DeviceInfo[] = []) => {
         let devices = knownDevices;
         for (const delay of DEVICE_WAKE_RECOVERY_DELAYS_MS) {
@@ -1588,20 +1596,18 @@ export function App() {
         }
         return devices.filter((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
       };
-      const attemptedDeviceIds = new Set<string>();
       const connectR2Devices = async (devices: DeviceInfo[], retryAttempted = false) => {
         let attempted = false;
         for (const device of devices) {
-          if (!retryAttempted && attemptedDeviceIds.has(device.id)) continue;
-          attemptedDeviceIds.add(device.id);
-          attempted = true;
-          await api.connectDevice(device.id).catch(() => undefined);
+          attempted = (await connectR2Device(device.id, retryAttempted)) || attempted;
         }
         return attempted;
       };
 
+      const configuredConnectAttempted = options.forceConfiguredConnect ? await connectR2Device(data.settings.r2SensorId) : false;
+      if (configuredConnectAttempted) await waitForNativeUpdate(250);
       let r2Devices = await collectR2Devices();
-      const attemptedConnect = await connectR2Devices(r2Devices);
+      const attemptedConnect = (await connectR2Devices(r2Devices)) || configuredConnectAttempted;
       if (attemptedConnect) {
         await waitForNativeUpdate(450);
         r2Devices = await collectR2Devices(r2Devices);
@@ -2174,7 +2180,7 @@ export function App() {
     }
     if (nextStatus.id === "r2") {
       setExpandedStatusId(null);
-      if (!r2RefreshBusy) void refreshR2Sensor();
+      if (!r2RefreshBusy) void refreshR2Sensor({ forceConfiguredConnect: true });
       return;
     }
     setExpandedStatusId((current) => (current === nextStatus.id ? null : nextStatus.id));

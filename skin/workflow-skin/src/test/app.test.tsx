@@ -2546,6 +2546,37 @@ describe("App shell", () => {
     );
   });
 
+  it("requests the configured R2 connection immediately when the disconnected R2 status is pressed", async () => {
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
+      {
+        sensors: [],
+        devices: []
+      }
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
+    fetchState.fetchMock.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "R2" }));
+
+    await waitFor(
+      () => {
+        const connectIndex = fetchState.fetchMock.mock.calls.findIndex(
+          ([url, init]) =>
+            url === "http://localhost:8080/api/v1/devices/connect" &&
+            init?.method === "PUT" &&
+            init.body === JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" })
+        );
+        const scanIndex = fetchState.fetchMock.mock.calls.findIndex(([url]) => String(url).includes("/api/v1/devices/scan"));
+        expect(connectIndex).toBeGreaterThanOrEqual(0);
+        expect(scanIndex).toBeGreaterThanOrEqual(0);
+        expect(connectIndex).toBeLessThan(scanIndex);
+      },
+      { timeout: 1200 }
+    );
+  });
+
   it("runs the startup discovery sequence when pressing R2 after it was powered on late", async () => {
     let poweredOn = false;
     let sawPoweredQuickScan = false;
@@ -2580,6 +2611,7 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
       );
     });
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 2));
     expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 2).map((request) => request.path)).toEqual([
       "/api/v1/devices/scan?connect=true&quick=true",
       "/api/v1/devices/scan?connect=true&quick=false"
@@ -2613,16 +2645,11 @@ describe("App shell", () => {
     scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(await screen.findByRole("button", { name: "R2" }));
 
-    await waitFor(
-      () => {
-        expect(fetchState.fetchMock).toHaveBeenCalledWith(
-          "http://localhost:8080/api/v1/devices/connect",
-          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
-        );
-      },
-      { timeout: 3500 }
+    await waitFor(() => expect(fetchState.connectCount).toBeGreaterThan(0), { timeout: 3500 });
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
     );
-    expect(fetchState.connectCount).toBeGreaterThan(0);
     expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
   });
 
@@ -2661,6 +2688,7 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
       );
     });
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 2));
     expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 2).map((request) => request.path)).toEqual([
       "/api/v1/devices/scan?connect=true&quick=true",
       "/api/v1/devices/scan?connect=true&quick=false"
@@ -2713,14 +2741,16 @@ describe("App shell", () => {
   });
 
   it("keeps refreshing R2 after the indicator connect until the native device shows connected", async () => {
+    let allowConnected = false;
+    let scansBeforePress = Number.POSITIVE_INFINITY;
     const r2Device = (state: string): DeviceInfo => ({ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state });
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         sensors: [],
         devices: [r2Device("disconnected")],
-        devicesAfterScan: ({ scanCount }) => [r2Device(scanCount > 2 ? "connected" : "discovered")],
-        scanDevicesResult: ({ scanCount }) => [r2Device(scanCount > 2 ? "connected" : "discovered")]
+        devicesAfterScan: ({ scanCount }) => [r2Device(allowConnected && scanCount > scansBeforePress + 1 ? "connected" : "discovered")],
+        scanDevicesResult: ({ scanCount }) => [r2Device(allowConnected && scanCount > scansBeforePress + 1 ? "connected" : "discovered")]
       }
     );
     render(<App />);
@@ -2728,6 +2758,8 @@ describe("App shell", () => {
     await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(2));
     expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
 
+    allowConnected = true;
+    scansBeforePress = fetchState.scanCount;
     await userEvent.click(screen.getByRole("button", { name: "R2" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Connected"), { timeout: 3500 });
