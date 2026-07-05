@@ -14,6 +14,7 @@ let profiles: ProfileRecord[] = [
 
 type DeviceScanContext = { machineState: MachineState; quick: boolean; quickParam: boolean | undefined; scanCount: number; connectCount: number };
 type DeviceScanRequest = { path: string; quick: boolean; connect: boolean };
+type DeviceConnectContext = { machineState: MachineState; deviceId: string; scanCount: number; connectCount: number };
 
 const communityRecommendation: CommunityRecommendation = {
   id: "rec-12345678",
@@ -89,7 +90,7 @@ function mockReaFetch(
     communityRecommendations?: CommunityRecommendation[];
     communityDownloadPayloads?: Record<string, CommunityDownloadPayload>;
     decentAccount?: DecentAccountStatus;
-    connectDeviceStatus?: number;
+    connectDeviceStatus?: number | ((context: DeviceConnectContext) => number | undefined);
     sensorExecuteResults?: Array<{ body: unknown; status?: number }>;
     shotDetailsById?: Record<string, ShotRecord>;
     beans?: Bean[];
@@ -142,6 +143,7 @@ function mockReaFetch(
   const communityRatePayloads: unknown[] = [];
   const createdProfilePayloads: unknown[] = [];
   const updatedProfilePayloads: unknown[] = [];
+  const updatedShotPayloads: Array<{ id: string; patch: Partial<ShotRecord> }> = [];
   const communityStore = new Map<string, unknown>([
     ["/api/v1/store/workflow-skin/community-display-name", ""],
     ["/api/v1/store/workflow-skin/community-downloaded-profiles", []],
@@ -323,7 +325,13 @@ function mockReaFetch(
       return responseJson(typeof options.scanDevicesResult === "function" ? options.scanDevicesResult(context) : options.scanDevicesResult ?? devices);
     }
     if ((method === "PUT" || method === "POST") && url.pathname === "/api/v1/devices/connect") {
-      if (options.connectDeviceStatus) return Promise.resolve(new Response(`connect failed for ${String(init.body)}`, { status: options.connectDeviceStatus }));
+      const body = JSON.parse(String(init.body || "{}")) as { deviceId?: string; id?: string };
+      const deviceId = body.deviceId ?? body.id ?? "";
+      const connectStatus =
+        typeof options.connectDeviceStatus === "function"
+          ? options.connectDeviceStatus({ machineState, deviceId, scanCount, connectCount })
+          : options.connectDeviceStatus;
+      if (connectStatus) return Promise.resolve(new Response(`connect failed for ${String(init.body)}`, { status: connectStatus }));
       connectCount += 1;
       return Promise.resolve(new Response("", { status: 200 }));
     }
@@ -360,6 +368,15 @@ function mockReaFetch(
       const shotId = decodeURIComponent(url.pathname.split("/").pop() ?? "");
       const shot = options.shotDetailsById?.[shotId] ?? shots.find((item) => item.id === shotId);
       return shot ? responseJson(shot) : Promise.resolve(new Response("Shot not found", { status: 404 }));
+    }
+    if (method === "PUT" && url.pathname.startsWith("/api/v1/shots/")) {
+      const shotId = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+      const patch = JSON.parse(String(init.body)) as Partial<ShotRecord>;
+      updatedShotPayloads.push({ id: shotId, patch });
+      const current = options.shotDetailsById?.[shotId] ?? shots.find((item) => item.id === shotId);
+      const updated = { ...current, ...patch, id: shotId, timestamp: current?.timestamp ?? new Date(0).toISOString(), workflow: patch.workflow ?? current?.workflow ?? {} };
+      shots = shots.map((item) => (item.id === shotId ? updated : item));
+      return responseJson(updated);
     }
     if (method === "PUT" && url.pathname === "/api/v1/scale/tare") {
       scaleTareCount += 1;
@@ -467,6 +484,9 @@ function mockReaFetch(
     },
     get updatedProfilePayloads() {
       return updatedProfilePayloads;
+    },
+    get updatedShotPayloads() {
+      return updatedShotPayloads;
     },
     get communityStore() {
       return communityStore;
@@ -1683,6 +1703,52 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
+  it("saves a corrected review bag to the shot workflow context", async () => {
+    const latestShot: ShotRecord = {
+      id: "wrong-bag-shot",
+      timestamp: "2026-06-20T08:00:00.000Z",
+      workflow: { profile: profiles[0].profile, context: { beanBatchId: "batch-1", targetDoseWeight: 18, targetYield: 40 } },
+      annotations: { actualYield: 40 },
+      measurements: []
+    };
+    const fetchState = mockReaFetch(initialSettings, {
+      shots: [latestShot],
+      beans: [
+        { id: "bean-1", roaster: "Pilot", name: "Halo" },
+        { id: "bean-2", roaster: "April", name: "Nansebo" }
+      ],
+      batchesByBeanId: {
+        "bean-1": [{ id: "batch-1", beanId: "bean-1", roastDate: "2026-06-01" }],
+        "bean-2": [{ id: "batch-2", beanId: "bean-2", roastDate: "2026-06-02", extras: { workflowSkin: { name: "Correct bag" } } }]
+      }
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByLabelText("Shot bag")).toHaveValue("batch-1");
+    await userEvent.selectOptions(screen.getByLabelText("Shot bag"), "batch-2");
+    await userEvent.click(screen.getByRole("button", { name: "Save Review" }));
+
+    await waitFor(() =>
+      expect(fetchState.updatedShotPayloads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "wrong-bag-shot",
+            patch: expect.objectContaining({
+              workflow: expect.objectContaining({
+                context: expect.objectContaining({
+                  beanBatchId: "batch-2",
+                  coffeeName: "Nansebo",
+                  coffeeRoaster: "April"
+                })
+              })
+            })
+          })
+        ])
+      )
+    );
+  });
+
   it("tares the scale and stays on brew when espresso returns idle without a new shot", async () => {
     vi.useFakeTimers();
     const previousShot: ShotRecord = {
@@ -2520,6 +2586,46 @@ describe("App shell", () => {
     ]);
   });
 
+  it("keeps scanning for R2 from the indicator after wake when the first post-wake scans miss it", async () => {
+    let poweredOn = false;
+    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
+    const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" };
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3", screensaverBrightness: 8 },
+      {
+        devices: [],
+        sensorsAfterScan: [detectedR2Sensor],
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [r2Device] : []),
+        connectDeviceStatus: ({ deviceId, scanCount }) => (deviceId === "F4:12:FA:FA:AC:E3" && scanCount < scansBeforeIndicatorPress + 4 ? 404 : undefined)
+      }
+    );
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+
+    const scansBeforeWake = fetchState.scanRequests.length;
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThan(scansBeforeWake));
+
+    poweredOn = true;
+    scansBeforeIndicatorPress = fetchState.scanCount;
+    await userEvent.click(await screen.findByRole("button", { name: "R2" }));
+
+    await waitFor(
+      () => {
+        expect(fetchState.fetchMock).toHaveBeenCalledWith(
+          "http://localhost:8080/api/v1/devices/connect",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
+        );
+      },
+      { timeout: 3500 }
+    );
+    expect(fetchState.connectCount).toBeGreaterThan(0);
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
+  });
+
   it("refreshes R2 when pressing a stale connected R2 indicator after it was powered on late", async () => {
     let poweredOn = false;
     let sawPoweredQuickScan = false;
@@ -2723,6 +2829,44 @@ describe("App shell", () => {
       "/api/v1/devices/scan?connect=true&quick=true",
       "/api/v1/devices/scan?connect=true&quick=false"
     ]);
+    expect(fetchState.scaleTareCount).toBe(0);
+  });
+
+  it("keeps scanning for Scale from the indicator after wake when the first post-wake scans miss it", async () => {
+    let poweredOn = false;
+    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
+    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" };
+    const fetchState = mockReaFetch(
+      { ...initialSettings, screensaverBrightness: 8 },
+      {
+        devices: [],
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [scaleDevice] : [])
+      }
+    );
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+
+    const scansBeforeWake = fetchState.scanRequests.length;
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThan(scansBeforeWake));
+
+    poweredOn = true;
+    scansBeforeIndicatorPress = fetchState.scanCount;
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+
+    await waitFor(
+      () => {
+        expect(fetchState.fetchMock).toHaveBeenCalledWith(
+          "http://localhost:8080/api/v1/devices/connect",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
+        );
+      },
+      { timeout: 3500 }
+    );
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
     expect(fetchState.scaleTareCount).toBe(0);
   });
 

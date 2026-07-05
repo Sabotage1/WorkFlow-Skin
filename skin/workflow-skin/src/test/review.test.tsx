@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { Grinder, SensorListItem, ShotRecord } from "../api/types";
+import type { Bag } from "../lib/bags";
 import { ReviewPage } from "../pages/ReviewPage";
 import { defaultSkinSettings } from "../state/skinSettings";
 
@@ -73,6 +74,11 @@ const grinders: Grinder[] = [
   { id: "g2", model: "ZP6" }
 ];
 
+const reviewBags: Bag[] = [
+  { id: "batch-1", beanId: "bean-1", roaster: "Pilot", bean: "Halo", process: "Washed", roastDate: "2026-06-01" },
+  { id: "batch-2", beanId: "bean-2", name: "Correct bag", roaster: "April", bean: "Nansebo", process: "Natural", roastDate: "2026-06-02" }
+];
+
 function appData(overrides: Partial<NonNullable<typeof appMocks.data>> = {}) {
   return {
     api: {},
@@ -119,6 +125,30 @@ describe("ReviewPage", () => {
     await userEvent.type(screen.getByLabelText("TDS"), "9.5");
     await userEvent.click(screen.getByRole("button", { name: /Save Review/i }));
     expect(onSave).toHaveBeenCalledWith("s1", expect.objectContaining({ drinkTds: 9.5, drinkEy: 21.11 }));
+  });
+
+  it("saves a corrected bag from the review page when the brew page had the wrong bag", async () => {
+    const onSave = vi.fn();
+    const onSaveShotBag = vi.fn();
+    render(
+      <ReviewPage
+        shot={shot}
+        previousShots={[]}
+        bags={reviewBags}
+        onSaveAnnotations={onSave}
+        onSaveShotBag={onSaveShotBag}
+        onUploadVisualizer={vi.fn()}
+        r2Sensor={null}
+        onReadR2={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText("Shot bag")).toHaveValue("batch-1");
+    await userEvent.selectOptions(screen.getByLabelText("Shot bag"), "batch-2");
+    await userEvent.click(screen.getByRole("button", { name: /Save Review/i }));
+
+    expect(onSaveShotBag).toHaveBeenCalledWith("s1", "batch-2");
+    expect(onSave).toHaveBeenCalledWith("s1", expect.objectContaining({ actualYield: 40 }));
   });
 
   it("prefers the grinder saved on the shot before the default grinder", () => {

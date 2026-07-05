@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Share2 } from "lucide-react";
 import type { Grinder, SensorListItem, ShotAnnotations, ShotRecord } from "../api/types";
 import { ShotGraph } from "../components/ShotGraph";
+import type { Bag } from "../lib/bags";
 import { calculateEy, cleanNumber } from "../lib/ey";
 import { tasteScoreLabel, tasteTone, tasteToneStyles } from "../lib/shotTaste";
 import { grindSizeFromShot, previousFiveForBag, shotContext, shotStats } from "../lib/shotStats";
@@ -34,6 +35,10 @@ function workflowSkinExtras(annotations: ShotAnnotations | undefined): Record<st
 
 function shotProfileTitle(shot: ShotRecord): string {
   return typeof shot.workflow?.profile?.title === "string" ? shot.workflow.profile.title.trim() : "";
+}
+
+function bagTitle(bag: Bag): string {
+  return bag.name?.trim() || [bag.roaster, bag.bean].filter(Boolean).join(" ") || bag.id;
 }
 
 function measurementSpanSeconds(measurements: ShotRecord["measurements"]): number {
@@ -87,12 +92,15 @@ export function ReviewPage({
   autoReadR2DelaySeconds = DEFAULT_R2_MEASURE_DELAY_SECONDS,
   grinders = [],
   defaultGrinderId,
+  bags = [],
+  onSaveShotBag,
   onLoadShot,
   onRecommendShot
 }: {
   shot: ShotRecord;
   previousShots: ShotRecord[];
   onSaveAnnotations: (shotId: string, annotations: ShotAnnotations) => Promise<void> | void;
+  onSaveShotBag?: (shotId: string, bagId: string) => Promise<void> | void;
   onUploadVisualizer: () => Promise<void> | void;
   r2Sensor: SensorListItem | null;
   r2Available?: boolean;
@@ -101,12 +109,14 @@ export function ReviewPage({
   autoReadR2DelaySeconds?: number;
   grinders?: Grinder[];
   defaultGrinderId?: string;
+  bags?: Bag[];
   onLoadShot?: (shotId: string) => Promise<ShotRecord | null> | ShotRecord | null;
   onRecommendShot?: (shot: ShotRecord) => Promise<void> | void;
   onBackToGraph?: () => void;
 }) {
   const stats = shotStats(shot);
   const context = shotContext(shot);
+  const shotBagId = context?.beanBatchId ?? "";
   const grinderById = useMemo(() => new Map(grinders.map((grinder) => [grinder.id, grinder])), [grinders]);
   const orderedGrinders = useMemo(() => {
     const defaultGrinder = defaultGrinderId ? grinderById.get(defaultGrinderId) : undefined;
@@ -124,6 +134,7 @@ export function ReviewPage({
   const [yieldText, setYieldText] = useState(String(shot.annotations?.actualYield ?? stats.finalYield ?? ""));
   const [grindSize, setGrindSize] = useState(grindSizeFromShot(shot) ?? "");
   const [selectedGrinderId, setSelectedGrinderId] = useState(initialGrinderId);
+  const [selectedBagId, setSelectedBagId] = useState(shotBagId);
   const [tasteRating, setTasteRating] = useState(shot.annotations?.enjoyment ?? 7);
   const [notes, setNotes] = useState(shot.annotations?.espressoNotes ?? "");
   const [r2Busy, setR2Busy] = useState(false);
@@ -145,7 +156,8 @@ export function ReviewPage({
     [doseText, yieldText, tdsText]
   );
 
-  const sameBagShots = context?.beanBatchId ? previousFiveForBag(previousShots, context.beanBatchId, shot.id) : [];
+  const selectedBag = useMemo(() => bags.find((bag) => bag.id === selectedBagId), [bags, selectedBagId]);
+  const sameBagShots = selectedBagId ? previousFiveForBag(previousShots, selectedBagId, shot.id) : [];
   const reviewShots = [shot, ...sameBagShots].map((item) => loadedShotsById[item.id] ?? item);
   const selectedShotIndex = Math.max(0, reviewShots.findIndex((item) => item.id === selectedShotId));
   const selectedShot = reviewShots[selectedShotIndex] ?? shot;
@@ -183,6 +195,27 @@ export function ReviewPage({
     Boolean(loadingGraphShotIds[selectedShot.id]) ||
     Boolean(onLoadShot && selectedShot.id && !selectedShotHasGraph && !failedGraphShotIds[selectedShot.id]);
   const sourceShotsById = useMemo(() => new Map([shot, ...previousShots].map((item) => [item.id, item])), [previousShots, shot]);
+
+  function shotWithSelectedBag(item: ShotRecord): ShotRecord {
+    const nextContext = { ...(item.workflow.context ?? {}) };
+    if (selectedBagId) {
+      nextContext.beanBatchId = selectedBagId;
+      nextContext.coffeeName = selectedBag?.bean;
+      nextContext.coffeeRoaster = selectedBag?.roaster;
+    } else {
+      delete nextContext.beanBatchId;
+      delete nextContext.coffeeName;
+      delete nextContext.coffeeRoaster;
+    }
+
+    return {
+      ...item,
+      workflow: {
+        ...item.workflow,
+        context: nextContext
+      }
+    };
+  }
 
   const loadShotGraph = useCallback(
     async (shotId: string, options: { force?: boolean; background?: boolean } = {}) => {
@@ -257,7 +290,13 @@ export function ReviewPage({
     };
   }
 
+  async function saveSelectedBagIfChanged() {
+    if (!onSaveShotBag || selectedBagId === shotBagId) return;
+    await onSaveShotBag(shot.id, selectedBagId);
+  }
+
   async function save() {
+    await saveSelectedBagIfChanged();
     await onSaveAnnotations(shot.id, reviewAnnotations());
     await loadShotGraph(shot.id, { force: true });
   }
@@ -271,9 +310,10 @@ export function ReviewPage({
     }
 
     const annotations = reviewAnnotations();
+    await saveSelectedBagIfChanged();
     await onSaveAnnotations(shot.id, annotations);
     const fullShot = (await loadShotGraph(shot.id, { force: true })) ?? shot;
-    await onRecommendShot({ ...fullShot, annotations });
+    await onRecommendShot({ ...shotWithSelectedBag(fullShot), annotations });
   }
 
   async function readR2(options: { allowUnavailable?: boolean } = {}) {
@@ -324,11 +364,12 @@ export function ReviewPage({
 
   useEffect(() => {
     setSelectedShotId(shot.id);
+    setSelectedBagId(shotBagId);
     setLoadedShotsById({});
     setLoadingGraphShotIds({});
     setFailedGraphShotIds({});
     requestedShotIdsRef.current.clear();
-  }, [shot.id]);
+  }, [shot.id, shotBagId]);
 
   useEffect(() => {
     if (!onLoadShot || !selectedShot.id) return;
@@ -386,6 +427,19 @@ export function ReviewPage({
       </section>
       <section className="panel">
         <h2>{selectedShotIsLatest ? "Last Shot Details" : "Selected Shot Details"}</h2>
+        {selectedShotIsLatest && bags.length > 0 && (
+          <label>
+            Shot bag
+            <select aria-label="Shot bag" value={selectedBagId} onChange={(event) => setSelectedBagId(event.target.value)}>
+              <option value="">No bag selected</option>
+              {bags.map((bag) => (
+                <option key={bag.id} value={bag.id}>
+                  {bagTitle(bag)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <p>Duration: {formatStat(selectedStats.durationSeconds, "s")}</p>
         <p>Dose: {formatStat(selectedDose, " g")}</p>
         <p>Yield: {formatStat(selectedYield, " g")}</p>

@@ -105,6 +105,7 @@ const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 5000;
 const DEVICE_DISCOVERY_SEQUENCE: readonly boolean[] = [true, false];
+const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 500, 1000];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
@@ -1118,7 +1119,7 @@ export function App() {
     setStartupApplyTick((tick) => tick + 1);
   }, [data.settings.startupProfileId]);
 
-  const connectConfiguredStartupDevices = useCallback(async () => {
+  const connectConfiguredStartupDevices = useCallback(async (options: { recovery?: boolean } = {}) => {
     const attemptedDeviceIds = new Set<string>();
     const connectStartupDevices = async (quick: boolean) => {
       const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
@@ -1132,13 +1133,16 @@ export function App() {
       }
     };
 
-    for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
-      await connectStartupDevices(quick);
+    for (const delay of options.recovery ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0]) {
+      if (delay > 0) await waitForNativeUpdate(delay);
+      for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
+        await connectStartupDevices(quick);
+      }
     }
   }, [api, data.devices, data.settings.r2SensorId]);
 
   const runStartupRecovery = useCallback(
-    (options: { resetStartupProfile?: boolean; manualSelectionVersion?: number } = {}) => {
+    (options: { resetStartupProfile?: boolean; manualSelectionVersion?: number; recoverDevices?: boolean } = {}) => {
       if (startupRecoveryRef.current) return startupRecoveryRef.current;
       const manualSelectionVersion = options.manualSelectionVersion ?? manualProfileSelectionRef.current.version;
 
@@ -1149,6 +1153,13 @@ export function App() {
         await data.refresh();
         if (options.resetStartupProfile !== false && manualProfileSelectionRef.current.version === manualSelectionVersion) {
           resetStartupProfileApply();
+        }
+        if (options.recoverDevices) {
+          window.setTimeout(() => {
+            void connectConfiguredStartupDevices({ recovery: true })
+              .then(() => data.refresh())
+              .catch(() => undefined);
+          }, 500);
         }
         window.setTimeout(() => {
           void data.refresh();
@@ -1566,10 +1577,14 @@ export function App() {
       await data.refresh();
       const collectR2Devices = async (knownDevices: DeviceInfo[] = []) => {
         let devices = knownDevices;
-        for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
-          const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
-          const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
-          devices = uniqueDevices([...devices, ...scannedDevices, ...listedDevices]);
+        for (const delay of DEVICE_WAKE_RECOVERY_DELAYS_MS) {
+          if (delay > 0) await waitForNativeUpdate(delay);
+          for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
+            const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
+            const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+            devices = uniqueDevices([...devices, ...scannedDevices, ...listedDevices]);
+          }
+          if (devices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId))) break;
         }
         return devices.filter((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
       };
@@ -1673,7 +1688,7 @@ export function App() {
     setLastUseAt(Date.now());
   };
 
-  const requestScaleConnection = useCallback(async (options: { quick?: boolean } = {}) => {
+  const requestScaleConnection = useCallback(async (options: { quick?: boolean; recovery?: boolean } = {}) => {
     await wakeMachineIfNeeded(api, data.machineState);
     const initialDevices = await api.listDevices().catch(() => data.devices ?? []);
     if (hasConnectedScale(initialDevices)) {
@@ -1687,39 +1702,51 @@ export function App() {
     let firstError: unknown = null;
     let refreshedDevices = initialDevices;
     const scanSequence = options.quick === undefined ? DEVICE_DISCOVERY_SEQUENCE : [options.quick];
+    const scanDelays = options.recovery ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0];
 
-    for (const quick of scanSequence) {
-      const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
-      const listedDevices = await api.listDevices().catch(() => refreshedDevices);
-      const devices = uniqueDevices([...refreshedDevices, ...scannedDevices, ...listedDevices]);
-      const scanFoundScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-      scanSawScale = scanSawScale || scanFoundScale;
+    for (const delay of scanDelays) {
+      if (delay > 0) await waitForNativeUpdate(delay);
+      for (const quick of scanSequence) {
+        const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
+        const listedDevices = await api.listDevices().catch(() => refreshedDevices);
+        const devices = uniqueDevices([...refreshedDevices, ...scannedDevices, ...listedDevices]);
+        const scanFoundScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+        scanSawScale = scanSawScale || scanFoundScale;
 
-      if (hasConnectedScale(devices)) {
-        await data.refresh();
-        return { connected: true, requested, found: true, scanSawScale, firstError };
-      }
-
-      const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
-      found = found || scanFoundScale || scaleDevices.length > 0;
-      for (const device of scaleDevices) {
-        try {
-          await api.connectDevice(device.id);
-          requested = true;
-        } catch (error) {
-          firstError ??= error;
+        if (hasConnectedScale(devices)) {
+          await data.refresh();
+          return { connected: true, requested, found: true, scanSawScale, firstError };
         }
-      }
 
-      refreshedDevices = devices;
-      if (scaleDevices.length > 0 || scanFoundScale) {
-        for (const delay of [250, 500]) {
-          await waitForNativeUpdate(delay);
-          refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
-          if (hasConnectedScale(refreshedDevices)) {
-            await data.refresh();
-            return { connected: true, requested, found: true, scanSawScale, firstError };
+        const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
+        found = found || scanFoundScale || scaleDevices.length > 0;
+        for (const device of scaleDevices) {
+          try {
+            await api.connectDevice(device.id);
+            requested = true;
+          } catch (error) {
+            firstError ??= error;
           }
+        }
+
+        refreshedDevices = devices;
+        if (scaleDevices.length > 0 || scanFoundScale) {
+          for (const connectDelay of [250, 500]) {
+            await waitForNativeUpdate(connectDelay);
+            refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
+            if (hasConnectedScale(refreshedDevices)) {
+              await data.refresh();
+              return { connected: true, requested, found: true, scanSawScale, firstError };
+            }
+          }
+          await data.refresh();
+          return {
+            connected: hasConnectedScale(refreshedDevices),
+            requested,
+            found: true,
+            scanSawScale,
+            firstError
+          };
         }
       }
     }
@@ -1745,7 +1772,7 @@ export function App() {
       return;
     }
 
-    void runStartupRecovery().catch(() => undefined);
+    void runStartupRecovery({ recoverDevices: true }).catch(() => undefined);
   }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
@@ -1852,6 +1879,38 @@ export function App() {
       setStatus({ type: "success", message: "Review saved." });
     } catch (error) {
       setStatus({ type: "error", message: `Could not save review: ${errorMessage(error)}` });
+    }
+  };
+
+  const saveReviewShotBag = async (shotId: string, bagId: string) => {
+    try {
+      const bag = data.bags.find((item) => item.id === bagId);
+      const currentShot =
+        (completedReviewShot?.id === shotId ? completedReviewShot : undefined) ??
+        (reviewShot?.id === shotId ? reviewShot : undefined) ??
+        data.shots.find((item) => item.id === shotId);
+      const context = { ...(currentShot?.workflow.context ?? {}) };
+
+      if (bagId) {
+        context.beanBatchId = bagId;
+        context.coffeeName = bag?.bean;
+        context.coffeeRoaster = bag?.roaster;
+      } else {
+        delete context.beanBatchId;
+        delete context.coffeeName;
+        delete context.coffeeRoaster;
+      }
+
+      const workflow: Workflow = {
+        ...(currentShot?.workflow ?? {}),
+        context
+      };
+      const updatedShot = await api.updateShot(shotId, { workflow });
+      setCompletedReviewShot((current) => (current?.id === shotId ? { ...current, workflow: updatedShot.workflow ?? workflow } : current));
+      await data.refresh();
+    } catch (error) {
+      setStatus({ type: "error", message: `Could not save review bag: ${errorMessage(error)}` });
+      throw error;
     }
   };
 
@@ -2017,7 +2076,7 @@ export function App() {
       await api.requestWakeLock().catch(() => undefined);
     }
     await wakeMachineIfNeeded(api, data.machineState);
-    await runStartupRecovery({ manualSelectionVersion });
+    await runStartupRecovery({ manualSelectionVersion, recoverDevices: true });
   };
 
   useEffect(() => {
@@ -2048,7 +2107,7 @@ export function App() {
   const forceScaleConnection = async () => {
     setStatus({ type: "success", message: "Scanning for scale." });
     try {
-      const result = await requestScaleConnection();
+      const result = await requestScaleConnection({ recovery: true });
       if (result.connected) {
         setStatus({ type: "success", message: "Scale connected." });
         return;
@@ -2086,7 +2145,7 @@ export function App() {
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
       try {
-        const result = await requestScaleConnection();
+        const result = await requestScaleConnection({ recovery: true });
         if (result.connected) {
           setStatus({ type: "success", message: "Scale connected. Tap Scale again to tare." });
           return;
@@ -2300,6 +2359,7 @@ export function App() {
               shot={reviewShot}
               previousShots={data.shots}
               onSaveAnnotations={saveReview}
+              onSaveShotBag={saveReviewShotBag}
               onUploadVisualizer={uploadReviewToVisualizer}
               r2Sensor={r2Sensor}
               r2Available={r2Available}
@@ -2308,6 +2368,7 @@ export function App() {
               autoReadR2DelaySeconds={data.settings.r2MeasureDelaySeconds}
               grinders={data.grinders ?? []}
               defaultGrinderId={data.settings.defaultGrinderId ?? data.settings.lastGrinderId}
+              bags={data.bags}
               onLoadShot={(shotId) => api.getShot(shotId)}
               onRecommendShot={recommendHistoryShot}
             />
