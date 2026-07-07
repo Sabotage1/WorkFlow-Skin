@@ -2627,8 +2627,8 @@ describe("App shell", () => {
       {
         devices: [],
         sensorsAfterScan: [detectedR2Sensor],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [r2Device] : []),
-        connectDeviceStatus: ({ deviceId, scanCount }) => (deviceId === "F4:12:FA:FA:AC:E3" && scanCount < scansBeforeIndicatorPress + 4 ? 404 : undefined)
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [r2Device] : []),
+        connectDeviceStatus: ({ deviceId, scanCount }) => (deviceId === "F4:12:FA:FA:AC:E3" && scanCount < scansBeforeIndicatorPress + 8 ? 404 : undefined)
       }
     );
     render(<App />);
@@ -2645,12 +2645,12 @@ describe("App shell", () => {
     scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(await screen.findByRole("button", { name: "R2" }));
 
-    await waitFor(() => expect(fetchState.connectCount).toBeGreaterThan(0), { timeout: 3500 });
+    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8), { timeout: 10000 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
     );
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
+    expect(fetchState.connectCount).toBeGreaterThan(0);
   });
 
   it("refreshes R2 when pressing a stale connected R2 indicator after it was powered on late", async () => {
@@ -2872,7 +2872,7 @@ describe("App shell", () => {
       { ...initialSettings, screensaverBrightness: 8 },
       {
         devices: [],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [scaleDevice] : [])
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [scaleDevice] : [])
       }
     );
     render(<App />);
@@ -2896,9 +2896,9 @@ describe("App shell", () => {
           expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
         );
       },
-      { timeout: 3500 }
+      { timeout: 10000 }
     );
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8);
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
@@ -2911,7 +2911,7 @@ describe("App shell", () => {
       { ...initialSettings, screensaverBrightness: 8 },
       {
         devices: [staleScale],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [recoveredScale] : []),
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [recoveredScale] : []),
         connectDeviceStatus: ({ deviceId }) => (deviceId === staleScale.id ? 404 : undefined)
       }
     );
@@ -2934,10 +2934,10 @@ describe("App shell", () => {
           expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-after-wake" }) })
         );
       },
-      { timeout: 3500 }
+      { timeout: 10000 }
     );
     expect(screen.queryByText(/Could not connect scale/i)).not.toBeInTheDocument();
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8);
   });
 
   it("tares the scale when the connected Scale status is pressed", async () => {

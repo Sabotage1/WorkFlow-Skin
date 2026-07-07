@@ -106,6 +106,7 @@ const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 5000;
 const DEVICE_DISCOVERY_SEQUENCE: readonly boolean[] = [true, false];
 const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 500, 1000];
+const DEVICE_INDICATOR_RECOVERY_DELAYS_MS: readonly number[] = [0, 500, 1000, 2000, 3500];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
@@ -1580,24 +1581,36 @@ export function App() {
     try {
       await wakeMachineIfNeeded(api, data.machineState);
       await data.refresh();
-      const attemptedDeviceIds = new Set<string>();
+      const connectedR2DeviceIds = new Set<string>();
       const connectR2Device = async (deviceId: string | undefined, retryAttempted = false) => {
         if (!deviceId) return false;
-        if (!retryAttempted && attemptedDeviceIds.has(deviceId)) return false;
-        attemptedDeviceIds.add(deviceId);
-        await api.connectDevice(deviceId).catch(() => undefined);
-        return true;
+        if (!retryAttempted && connectedR2DeviceIds.has(deviceId)) return false;
+        try {
+          await api.connectDevice(deviceId);
+          connectedR2DeviceIds.add(deviceId);
+          return true;
+        } catch {
+          return false;
+        }
       };
       const collectR2Devices = async (knownDevices: DeviceInfo[] = []) => {
         let devices = knownDevices;
-        for (const delay of DEVICE_WAKE_RECOVERY_DELAYS_MS) {
+        const recoveryDelays = options.forceConfiguredConnect ? DEVICE_INDICATOR_RECOVERY_DELAYS_MS : DEVICE_WAKE_RECOVERY_DELAYS_MS;
+        for (const delay of recoveryDelays) {
           if (delay > 0) await waitForNativeUpdate(delay);
+          let scannedR2ThisPass = false;
           for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
             const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
             const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+            scannedR2ThisPass =
+              scannedR2ThisPass || scannedDevices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
             devices = uniqueDevices([...devices, ...scannedDevices, ...listedDevices]);
           }
-          if (devices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId))) break;
+          const connectedR2Device = devices.some(
+            (item) => (isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId)) && isConnectedDevice(item)
+          );
+          if (connectedR2Device || scannedR2ThisPass) break;
+          if (!options.forceConfiguredConnect && devices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId))) break;
         }
         return devices.filter((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
       };
@@ -1714,7 +1727,7 @@ export function App() {
     let refreshedDevices = initialDevices;
     const missingScaleDeviceIds = new Set<string>();
     const scanSequence = options.quick === undefined ? DEVICE_DISCOVERY_SEQUENCE : [options.quick];
-    const scanDelays = options.recovery ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0];
+    const scanDelays = options.recovery ? DEVICE_INDICATOR_RECOVERY_DELAYS_MS : [0];
 
     for (const delay of scanDelays) {
       if (delay > 0) await waitForNativeUpdate(delay);

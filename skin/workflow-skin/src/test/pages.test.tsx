@@ -1377,13 +1377,18 @@ describe("ScreensaverPage", () => {
     render(<ScreensaverPage title="WorkFlow" onWake={vi.fn()} />);
 
     const screensaver = screen.getByLabelText("Screensaver mode");
+    const art = screensaver.querySelector(".screensaver-art") as HTMLElement | null;
     const panel = screen.getByRole("heading", { name: "WorkFlow" }).closest(".screensaver-panel");
+    expect(art).not.toBeNull();
     expect(panel).not.toBeNull();
     expect(screensaver.style.getPropertyValue("--screensaver-drift-x")).not.toBe("");
-    expect(screensaver.style.backgroundPosition).not.toBe("center");
+    expect(screensaver.style.backgroundImage).toBe("");
+    expect(art?.style.backgroundImage).not.toBe("");
+    expect(art?.style.backgroundPosition).not.toBe("center");
     const firstDriftX = screensaver.style.getPropertyValue("--screensaver-drift-x");
     const firstDriftY = screensaver.style.getPropertyValue("--screensaver-drift-y");
-    const firstPosition = screensaver.style.backgroundPosition;
+    const firstArtDriftX = art?.style.getPropertyValue("--screensaver-art-drift-x");
+    const firstPosition = art?.style.backgroundPosition;
 
     act(() => {
       vi.advanceTimersByTime(45_000);
@@ -1391,7 +1396,8 @@ describe("ScreensaverPage", () => {
 
     expect(screensaver.style.getPropertyValue("--screensaver-drift-x")).not.toBe(firstDriftX);
     expect(screensaver.style.getPropertyValue("--screensaver-drift-y")).not.toBe(firstDriftY);
-    expect(screensaver.style.backgroundPosition).not.toBe(firstPosition);
+    expect(art?.style.getPropertyValue("--screensaver-art-drift-x")).not.toBe(firstArtDriftX);
+    expect(art?.style.backgroundPosition).not.toBe(firstPosition);
     expect(panel).toHaveClass("screensaver-panel");
   });
 });

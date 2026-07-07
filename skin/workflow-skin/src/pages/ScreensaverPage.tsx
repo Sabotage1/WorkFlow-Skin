@@ -27,10 +27,14 @@ export function ScreensaverPage({ title, onWake }: { title: string; onWake: () =
   const placement = screensaverPlacements[artIndex % screensaverPlacements.length] ?? screensaverPlacements[0];
   const style = {
     backgroundColor: "#020506",
-    backgroundImage: art.backgroundImage,
-    backgroundPosition: placement.artPosition,
     "--screensaver-drift-x": `${placement.panelX}px`,
     "--screensaver-drift-y": `${placement.panelY}px`
+  } as CSSProperties;
+  const artStyle = {
+    backgroundImage: art.backgroundImage,
+    backgroundPosition: placement.artPosition,
+    "--screensaver-art-drift-x": `${Math.round(placement.panelX * -1.8)}px`,
+    "--screensaver-art-drift-y": `${Math.round(placement.panelY * -1.4)}px`
   } as CSSProperties;
 
   useEffect(() => {
@@ -51,6 +55,7 @@ export function ScreensaverPage({ title, onWake }: { title: string; onWake: () =
       }}
       tabIndex={0}
     >
+      <div className="screensaver-art" aria-hidden="true" style={artStyle} />
       <div className="screensaver-panel">
         <span className="eyebrow">Machine sleeping</span>
         <h1>WorkFlow</h1>
