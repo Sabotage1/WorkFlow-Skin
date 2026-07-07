@@ -133,6 +133,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isDeviceNotFoundError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return message.includes("404") || message.includes("device not found");
+}
+
 function sleepFailureStatusMessage(error: unknown): string {
   const message = errorMessage(error).toLowerCase();
   if (message.includes("devicenotconnected") || message.includes("machine not connected") || message.includes("not connected")) {
@@ -1707,6 +1712,7 @@ export function App() {
     let scanSawScale = false;
     let firstError: unknown = null;
     let refreshedDevices = initialDevices;
+    const missingScaleDeviceIds = new Set<string>();
     const scanSequence = options.quick === undefined ? DEVICE_DISCOVERY_SEQUENCE : [options.quick];
     const scanDelays = options.recovery ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0];
 
@@ -1715,7 +1721,10 @@ export function App() {
       for (const quick of scanSequence) {
         const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
         const listedDevices = await api.listDevices().catch(() => refreshedDevices);
-        const devices = uniqueDevices([...refreshedDevices, ...scannedDevices, ...listedDevices]);
+        const scannedScaleDeviceIds = new Set(scannedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device)).map((device) => device.id));
+        const activeKnownDevices = (devices: DeviceInfo[]) =>
+          devices.filter((device) => !missingScaleDeviceIds.has(device.id) || scannedScaleDeviceIds.has(device.id));
+        const devices = uniqueDevices([...activeKnownDevices(refreshedDevices), ...scannedDevices, ...activeKnownDevices(listedDevices)]);
         const scanFoundScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
         scanSawScale = scanSawScale || scanFoundScale;
 
@@ -1726,25 +1735,34 @@ export function App() {
 
         const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
         found = found || scanFoundScale || scaleDevices.length > 0;
+        let attemptedThisPass = false;
+        let requestedThisPass = false;
         for (const device of scaleDevices) {
           try {
+            attemptedThisPass = true;
             await api.connectDevice(device.id);
             requested = true;
+            requestedThisPass = true;
           } catch (error) {
-            firstError ??= error;
+            if (isDeviceNotFoundError(error)) {
+              missingScaleDeviceIds.add(device.id);
+            } else {
+              firstError ??= error;
+            }
           }
         }
 
         refreshedDevices = devices;
-        if (scaleDevices.length > 0 || scanFoundScale) {
+        if (attemptedThisPass || scanFoundScale) {
           for (const connectDelay of [250, 500]) {
             await waitForNativeUpdate(connectDelay);
-            refreshedDevices = uniqueDevices([...(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
+            refreshedDevices = uniqueDevices([...activeKnownDevices(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
             if (hasConnectedScale(refreshedDevices)) {
               await data.refresh();
               return { connected: true, requested, found: true, scanSawScale, firstError };
             }
           }
+          if (options.recovery && !scanFoundScale && !requestedThisPass) continue;
           await data.refresh();
           return {
             connected: hasConnectedScale(refreshedDevices),

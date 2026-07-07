@@ -2902,6 +2902,44 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
+  it("keeps scanning for Scale after wake when a stale scale id returns device not found", async () => {
+    let poweredOn = false;
+    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
+    const staleScale: DeviceInfo = { id: "D4:41:89:DB:21:2E", name: "Acaia Pearl", type: "scale", state: "disconnected" };
+    const recoveredScale: DeviceInfo = { id: "scale-after-wake", name: "Acaia Pearl", type: "scale", state: "discovered" };
+    const fetchState = mockReaFetch(
+      { ...initialSettings, screensaverBrightness: 8 },
+      {
+        devices: [staleScale],
+        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 3 ? [recoveredScale] : []),
+        connectDeviceStatus: ({ deviceId }) => (deviceId === staleScale.id ? 404 : undefined)
+      }
+    );
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Not connected"));
+
+    poweredOn = true;
+    scansBeforeIndicatorPress = fetchState.scanCount;
+    await userEvent.click(screen.getByRole("button", { name: "Scale" }));
+
+    await waitFor(
+      () => {
+        expect(fetchState.fetchMock).toHaveBeenCalledWith(
+          "http://localhost:8080/api/v1/devices/connect",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-after-wake" }) })
+        );
+      },
+      { timeout: 3500 }
+    );
+    expect(screen.queryByText(/Could not connect scale/i)).not.toBeInTheDocument();
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 4);
+  });
+
   it("tares the scale when the connected Scale status is pressed", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected" }]

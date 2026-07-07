@@ -1370,6 +1370,30 @@ describe("ScreensaverPage", () => {
     const visibleQuote = screensaverQuotes.map((quote) => screen.queryByText(quote)).find(Boolean);
     expect(visibleQuote).toHaveClass("screensaver-subtitle");
   });
+
+  it("moves the screensaver panel and art position on each picture change", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    render(<ScreensaverPage title="WorkFlow" onWake={vi.fn()} />);
+
+    const screensaver = screen.getByLabelText("Screensaver mode");
+    const panel = screen.getByRole("heading", { name: "WorkFlow" }).closest(".screensaver-panel");
+    expect(panel).not.toBeNull();
+    expect(screensaver.style.getPropertyValue("--screensaver-drift-x")).not.toBe("");
+    expect(screensaver.style.backgroundPosition).not.toBe("center");
+    const firstDriftX = screensaver.style.getPropertyValue("--screensaver-drift-x");
+    const firstDriftY = screensaver.style.getPropertyValue("--screensaver-drift-y");
+    const firstPosition = screensaver.style.backgroundPosition;
+
+    act(() => {
+      vi.advanceTimersByTime(45_000);
+    });
+
+    expect(screensaver.style.getPropertyValue("--screensaver-drift-x")).not.toBe(firstDriftX);
+    expect(screensaver.style.getPropertyValue("--screensaver-drift-y")).not.toBe(firstDriftY);
+    expect(screensaver.style.backgroundPosition).not.toBe(firstPosition);
+    expect(panel).toHaveClass("screensaver-panel");
+  });
 });
 
 describe("CommunityPage", () => {

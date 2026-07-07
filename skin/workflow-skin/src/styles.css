@@ -952,9 +952,8 @@ button {
   place-items: center;
   padding: 28px;
   background: #020506;
-  background-position: center;
   background-repeat: no-repeat;
-  background-size: cover;
+  background-size: min(62vw, 760px) auto;
   cursor: pointer;
 }
 
@@ -972,6 +971,9 @@ button {
   background: rgb(2 5 6 / 58%);
   box-shadow: 0 18px 52px rgb(0 0 0 / 38%);
   text-align: center;
+  transform: translate3d(var(--screensaver-drift-x, 0), var(--screensaver-drift-y, 0), 0);
+  transition: transform 900ms ease;
+  will-change: transform;
 }
 
 .screensaver-panel h1 {
