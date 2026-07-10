@@ -104,9 +104,9 @@ const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 5000;
-const DEVICE_DISCOVERY_SEQUENCE: readonly boolean[] = [true, false];
-const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 500, 1000];
-const DEVICE_INDICATOR_RECOVERY_DELAYS_MS: readonly number[] = [0, 500, 1000, 2000, 3500];
+const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1000];
+const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750, 1500];
+const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 
@@ -132,11 +132,6 @@ const navById: Record<MainMenuItemId, { label: string; icon: React.ComponentType
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isDeviceNotFoundError(error: unknown): boolean {
-  const message = errorMessage(error).toLowerCase();
-  return message.includes("404") || message.includes("device not found");
 }
 
 function sleepFailureStatusMessage(error: unknown): string {
@@ -312,6 +307,10 @@ function isConnectedDevice(device: DeviceInfo): boolean {
   return ["connected", "ready", "online"].includes(device.state?.trim().toLowerCase() ?? "");
 }
 
+function isAvailableDevice(device: DeviceInfo): boolean {
+  return device.available !== false;
+}
+
 function isMachineDeviceCandidate(device: DeviceInfo): boolean {
   const label = deviceLabel(device);
   return (
@@ -321,11 +320,11 @@ function isMachineDeviceCandidate(device: DeviceInfo): boolean {
 }
 
 function hasConnectedScale(devices: DeviceInfo[]): boolean {
-  return devices.some((device) => isScaleDeviceCandidate(device) && isConnectedDevice(device) && !isR2Device(device));
+  return devices.some((device) => isAvailableDevice(device) && isScaleDeviceCandidate(device) && isConnectedDevice(device) && !isR2Device(device));
 }
 
 function disconnectedScaleDevices(devices: DeviceInfo[]): DeviceInfo[] {
-  return devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
+  return devices.filter((device) => isAvailableDevice(device) && isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
 }
 
 function deviceIdSignature(devices: DeviceInfo[]): string {
@@ -339,12 +338,6 @@ function isConfiguredR2Device(device: DeviceInfo, configuredR2DeviceId: string |
   return Boolean(configuredR2DeviceId && device.id === configuredR2DeviceId);
 }
 
-function isConnectableStartupDevice(device: DeviceInfo, configuredR2DeviceId: string | undefined): boolean {
-  const isScale = isScaleDeviceCandidate(device) && !isR2Device(device);
-  const shouldConnectR2 = Boolean(configuredR2DeviceId && (isConfiguredR2Device(device, configuredR2DeviceId) || isR2Device(device)));
-  return (isMachineDeviceCandidate(device) || isScale || shouldConnectR2) && !isConnectedDevice(device);
-}
-
 function uniqueDevices(devices: DeviceInfo[]): DeviceInfo[] {
   const byId = new Map<string, DeviceInfo>();
   for (const device of devices) {
@@ -353,10 +346,12 @@ function uniqueDevices(devices: DeviceInfo[]): DeviceInfo[] {
       byId.set(device.id, device);
       continue;
     }
+    const available = current.available === true || device.available === true ? true : device.available ?? current.available;
     byId.set(device.id, {
       ...current,
       ...device,
-      state: isConnectedDevice(current) && !isConnectedDevice(device) ? current.state : device.state
+      state: isConnectedDevice(current) && !isConnectedDevice(device) ? current.state : device.state,
+      available
     });
   }
   return Array.from(byId.values());
@@ -1126,24 +1121,50 @@ export function App() {
   }, [data.settings.startupProfileId]);
 
   const connectConfiguredStartupDevices = useCallback(async (options: { recovery?: boolean } = {}) => {
-    const attemptedDeviceIds = new Set<string>();
-    const connectStartupDevices = async (quick: boolean) => {
-      const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
-      const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
-      const devices = uniqueDevices([...scannedDevices, ...listedDevices]);
-
-      for (const device of devices.filter((item) => isConnectableStartupDevice(item, data.settings.r2SensorId))) {
-        if (attemptedDeviceIds.has(device.id)) continue;
-        attemptedDeviceIds.add(device.id);
-        await api.connectDevice(device.id).catch(() => undefined);
-      }
-    };
-
     for (const delay of options.recovery ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0]) {
       if (delay > 0) await waitForNativeUpdate(delay);
-      for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
-        await connectStartupDevices(quick);
+      const scannedDevices = await api.scanDevices({ connect: true, quick: false }).catch((error) => {
+        skinLog("startup_device_scan_failed", { error: errorMessage(error) });
+        return [] as DeviceInfo[];
+      });
+      const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+      const devices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
+
+      // The blocking scan gets first choice through ReaPrime's connection
+      // policy. If a single device remains discovered afterward, explicitly
+      // connect it now that no scan is in flight. R2 sensors always use this
+      // explicit path because ConnectionManager only owns machines and scales.
+      const disconnectedMachines = devices.filter((item) => !isConnectedDevice(item) && isMachineDeviceCandidate(item));
+      const disconnectedScales = devices.filter(
+        (item) => !isConnectedDevice(item) && isScaleDeviceCandidate(item) && !isR2Device(item)
+      );
+      const disconnectedR2 = devices.filter(
+        (item) =>
+          !isConnectedDevice(item) &&
+          (isConfiguredR2Device(item, data.settings.r2SensorId) || (Boolean(data.settings.r2SensorId) && isR2Device(item)))
+      );
+      const startupCandidates = [
+        ...(disconnectedMachines.length === 1 ? disconnectedMachines : []),
+        ...(disconnectedScales.length === 1 ? disconnectedScales : []),
+        ...disconnectedR2
+      ];
+      for (const device of startupCandidates) {
+        await api.connectDevice(device.id).catch((error) => {
+          skinLog("startup_device_connect_failed", { deviceId: device.id, error: errorMessage(error) });
+        });
       }
+
+      const refreshedDevices = await api.listDevices().catch(() => devices);
+      const scaleReady = hasConnectedScale(refreshedDevices) || !devices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+      const r2Ready =
+        !data.settings.r2SensorId ||
+        refreshedDevices.some(
+          (device) =>
+            isAvailableDevice(device) &&
+            isConnectedDevice(device) &&
+            (isConfiguredR2Device(device, data.settings.r2SensorId) || isR2Device(device))
+        );
+      if (scaleReady && r2Ready) break;
     }
   }, [api, data.devices, data.settings.r2SensorId]);
 
@@ -1580,72 +1601,65 @@ export function App() {
     setStatus({ type: "success", message: "Looking for DiFluid R2." });
     try {
       await wakeMachineIfNeeded(api, data.machineState);
-      await data.refresh();
-      const connectedR2DeviceIds = new Set<string>();
-      const connectR2Device = async (deviceId: string | undefined, retryAttempted = false) => {
-        if (!deviceId) return false;
-        if (!retryAttempted && connectedR2DeviceIds.has(deviceId)) return false;
-        try {
-          await api.connectDevice(deviceId);
-          connectedR2DeviceIds.add(deviceId);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      const collectR2Devices = async (knownDevices: DeviceInfo[] = []) => {
-        let devices = knownDevices;
-        const recoveryDelays = options.forceConfiguredConnect ? DEVICE_INDICATOR_RECOVERY_DELAYS_MS : DEVICE_WAKE_RECOVERY_DELAYS_MS;
-        for (const delay of recoveryDelays) {
-          if (delay > 0) await waitForNativeUpdate(delay);
-          let scannedR2ThisPass = false;
-          for (const quick of DEVICE_DISCOVERY_SEQUENCE) {
-            const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
-            const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
-            scannedR2ThisPass =
-              scannedR2ThisPass || scannedDevices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
-            devices = uniqueDevices([...devices, ...scannedDevices, ...listedDevices]);
-          }
-          const connectedR2Device = devices.some(
-            (item) => (isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId)) && isConnectedDevice(item)
-          );
-          if (connectedR2Device || scannedR2ThisPass) break;
-          if (!options.forceConfiguredConnect && devices.some((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId))) break;
-        }
-        return devices.filter((item) => isR2Device(item) || isConfiguredR2Device(item, data.settings.r2SensorId));
-      };
-      const connectR2Devices = async (devices: DeviceInfo[], retryAttempted = false) => {
-        let attempted = false;
-        for (const device of devices) {
-          attempted = (await connectR2Device(device.id, retryAttempted)) || attempted;
-        }
-        return attempted;
-      };
+      const scannedDevices = await api.scanDevices({ connect: false, quick: false });
+      const listedDevices = await api.listDevices().catch(() => [] as DeviceInfo[]);
+      const r2Devices = uniqueDevices([...listedDevices, ...scannedDevices])
+        .filter(
+          (device) =>
+            isAvailableDevice(device) &&
+            (isR2Device(device) || isConfiguredR2Device(device, data.settings.r2SensorId))
+        )
+        .sort((left, right) => {
+          const leftConfigured = isConfiguredR2Device(left, data.settings.r2SensorId) ? 1 : 0;
+          const rightConfigured = isConfiguredR2Device(right, data.settings.r2SensorId) ? 1 : 0;
+          return rightConfigured - leftConfigured;
+        });
 
-      const configuredConnectAttempted = options.forceConfiguredConnect ? await connectR2Device(data.settings.r2SensorId) : false;
-      if (configuredConnectAttempted) await waitForNativeUpdate(250);
-      let r2Devices = await collectR2Devices();
-      const attemptedConnect = (await connectR2Devices(r2Devices)) || configuredConnectAttempted;
-      if (attemptedConnect) {
-        await waitForNativeUpdate(450);
-        r2Devices = await collectR2Devices(r2Devices);
-        await connectR2Devices(r2Devices, true);
-      }
-
-      const sensor = await findR2SensorWithRetry(api, data.sensors);
-      const sensorId = sensor?.id ?? data.settings.r2SensorId ?? r2Devices[0]?.id;
-      if (!sensorId) {
+      if (r2Devices.length === 0) {
         await data.refresh();
-        setStatus({ type: "error", message: "No DiFluid R2 detected after refresh." });
+        skinLog("r2_manual_scan_not_found", { configuredDeviceId: data.settings.r2SensorId });
+        setStatus({ type: "error", message: "No available DiFluid R2 was found. Keep it awake and tap R2 again." });
         return;
       }
 
-      if (!r2Devices.some((device) => device.id === sensorId && isConnectedDevice(device))) {
-        await api.connectDevice(sensorId).catch(() => undefined);
+      let firstConnectError: unknown = null;
+      for (const device of r2Devices) {
+        if (!isConnectedDevice(device)) {
+          try {
+            await api.connectDevice(device.id);
+          } catch (error) {
+            firstConnectError ??= error;
+            skinLog("r2_manual_connect_failed", { deviceId: device.id, error: errorMessage(error) });
+            continue;
+          }
+        }
+
+        for (const delay of DEVICE_CONNECTION_VERIFY_DELAYS_MS) {
+          if (delay > 0) await waitForNativeUpdate(delay);
+          const [verifiedDevices, sensors] = await Promise.all([
+            api.listDevices().catch(() => [] as DeviceInfo[]),
+            api.listSensors().catch(() => [] as SensorListItem[])
+          ]);
+          const connectedDevice = verifiedDevices.some(
+            (item) => item.id === device.id && isAvailableDevice(item) && isConnectedDevice(item)
+          );
+          const connectedSensor = sensors.find((sensor) => sensor.id === device.id) ?? findDifluidR2Sensor(sensors);
+          if (!connectedDevice && !connectedSensor) continue;
+
+          const sensorId = connectedSensor?.id ?? device.id;
+          await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
+          await data.refresh();
+          skinLog("r2_manual_connect_confirmed", { deviceId: sensorId, forced: options.forceConfiguredConnect === true });
+          setStatus({ type: "success", message: "R2 connected." });
+          return;
+        }
       }
-      await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
+
       await data.refresh();
-      setStatus({ type: "success", message: `R2 connected through ReaPrime: ${sensorId}.` });
+      if (firstConnectError) {
+        throw firstConnectError;
+      }
+      setStatus({ type: "error", message: "R2 was found but did not report connected. Keep it awake and tap R2 again." });
     } catch (error) {
       setStatus({ type: "error", message: `Could not refresh R2: ${errorMessage(error)}` });
     } finally {
@@ -1712,79 +1726,56 @@ export function App() {
     setLastUseAt(Date.now());
   };
 
-  const requestScaleConnection = useCallback(async (options: { quick?: boolean; recovery?: boolean } = {}) => {
+  const requestScaleConnection = useCallback(async () => {
     await wakeMachineIfNeeded(api, data.machineState);
-    const initialDevices = await api.listDevices().catch(() => data.devices ?? []);
+    const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
     if (hasConnectedScale(initialDevices)) {
       await data.refresh();
       return { connected: true, requested: false, found: true, scanSawScale: true, firstError: null };
     }
 
     let requested = false;
-    let found = false;
-    let scanSawScale = false;
     let firstError: unknown = null;
-    let refreshedDevices = initialDevices;
-    const missingScaleDeviceIds = new Set<string>();
-    const scanSequence = options.quick === undefined ? DEVICE_DISCOVERY_SEQUENCE : [options.quick];
-    const scanDelays = options.recovery ? DEVICE_INDICATOR_RECOVERY_DELAYS_MS : [0];
+    let scannedDevices: DeviceInfo[] = [];
+    try {
+      // A blocking scan is important here. A quick scan starts in the
+      // background, and current ReaPrime intentionally drops a second full
+      // connect request while that first scan is still running.
+      scannedDevices = await api.scanDevices({ connect: true, quick: false });
+    } catch (error) {
+      firstError = error;
+    }
 
-    for (const delay of scanDelays) {
-      if (delay > 0) await waitForNativeUpdate(delay);
-      for (const quick of scanSequence) {
-        const scannedDevices = await api.scanDevices({ connect: true, quick }).catch(() => [] as DeviceInfo[]);
-        const listedDevices = await api.listDevices().catch(() => refreshedDevices);
-        const scannedScaleDeviceIds = new Set(scannedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device)).map((device) => device.id));
-        const activeKnownDevices = (devices: DeviceInfo[]) =>
-          devices.filter((device) => !missingScaleDeviceIds.has(device.id) || scannedScaleDeviceIds.has(device.id));
-        const devices = uniqueDevices([...activeKnownDevices(refreshedDevices), ...scannedDevices, ...activeKnownDevices(listedDevices)]);
-        const scanFoundScale = scannedDevices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-        scanSawScale = scanSawScale || scanFoundScale;
+    const listedDevices = await api.listDevices().catch(() => [] as DeviceInfo[]);
+    let refreshedDevices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
+    const scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+    const scanSawScale = scannedDevices.some(
+      (device) => isAvailableDevice(device) && isScaleDeviceCandidate(device) && !isR2Device(device)
+    );
 
-        if (hasConnectedScale(devices)) {
-          await data.refresh();
-          return { connected: true, requested, found: true, scanSawScale, firstError };
-        }
+    if (hasConnectedScale(refreshedDevices)) {
+      await data.refresh();
+      return { connected: true, requested, found: true, scanSawScale, firstError };
+    }
 
-        const scaleDevices = devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
-        found = found || scanFoundScale || scaleDevices.length > 0;
-        let attemptedThisPass = false;
-        let requestedThisPass = false;
-        for (const device of scaleDevices) {
-          try {
-            attemptedThisPass = true;
-            await api.connectDevice(device.id);
-            requested = true;
-            requestedThisPass = true;
-          } catch (error) {
-            if (isDeviceNotFoundError(error)) {
-              missingScaleDeviceIds.add(device.id);
-            } else {
-              firstError ??= error;
-            }
-          }
-        }
+    for (const device of scaleDevices.filter((item) => !isConnectedDevice(item))) {
+      try {
+        await api.connectDevice(device.id);
+        requested = true;
+      } catch (error) {
+        firstError ??= error;
+        skinLog("scale_manual_connect_failed", { deviceId: device.id, error: errorMessage(error) });
+        continue;
+      }
 
-        refreshedDevices = devices;
-        if (attemptedThisPass || scanFoundScale) {
-          for (const connectDelay of [250, 500]) {
-            await waitForNativeUpdate(connectDelay);
-            refreshedDevices = uniqueDevices([...activeKnownDevices(await api.listDevices().catch(() => refreshedDevices)), ...scannedDevices]);
-            if (hasConnectedScale(refreshedDevices)) {
-              await data.refresh();
-              return { connected: true, requested, found: true, scanSawScale, firstError };
-            }
-          }
-          if (options.recovery && !scanFoundScale && !requestedThisPass) continue;
-          await data.refresh();
-          return {
-            connected: hasConnectedScale(refreshedDevices),
-            requested,
-            found: true,
-            scanSawScale,
-            firstError
-          };
-        }
+      for (const delay of DEVICE_CONNECTION_VERIFY_DELAYS_MS) {
+        if (delay > 0) await waitForNativeUpdate(delay);
+        refreshedDevices = (await api.listDevices().catch(() => refreshedDevices)).filter(isAvailableDevice);
+        if (!hasConnectedScale(refreshedDevices)) continue;
+
+        await data.refresh();
+        skinLog("scale_manual_connect_confirmed", { deviceId: device.id });
+        return { connected: true, requested, found: true, scanSawScale, firstError };
       }
     }
 
@@ -1792,7 +1783,7 @@ export function App() {
     return {
       connected: hasConnectedScale(refreshedDevices),
       requested,
-      found,
+      found: scaleDevices.length > 0,
       scanSawScale,
       firstError
     };
@@ -2072,10 +2063,32 @@ export function App() {
 
   const applyScreensaverDisplay = useCallback(async () => {
     const brightness = screensaverBrightnessValue(data.settings.screensaverBrightness);
-    await Promise.all([
-      api.setDisplayBrightness(brightness).catch(() => undefined),
-      api.releaseWakeLock().catch(() => undefined)
-    ]);
+    await api.releaseWakeLock().catch((error) => {
+      skinLog("screensaver_wakelock_release_failed", { error: errorMessage(error) });
+    });
+
+    let lastError: unknown = null;
+    for (const delay of DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS) {
+      if (delay > 0) await waitForNativeUpdate(delay);
+      try {
+        const display = await api.setDisplayBrightness(brightness);
+        const requestedBrightness = display.requestedBrightness ?? display.brightness;
+        skinLog("screensaver_brightness_applied", {
+          configuredBrightness: brightness,
+          requestedBrightness,
+          appliedBrightness: display.brightness,
+          supported: display.platformSupported?.brightness
+        });
+        if (requestedBrightness === brightness || display.platformSupported?.brightness === false) return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    skinLog("screensaver_brightness_unconfirmed", {
+      configuredBrightness: brightness,
+      error: lastError ? errorMessage(lastError) : undefined
+    });
   }, [api, data.settings.screensaverBrightness]);
 
   const sleepMachine = useCallback(async () => {
@@ -2144,29 +2157,25 @@ export function App() {
   const forceScaleConnection = async () => {
     setStatus({ type: "success", message: "Scanning for scale." });
     try {
-      const result = await requestScaleConnection({ recovery: true });
+      const result = await requestScaleConnection();
       if (result.connected) {
         setStatus({ type: "success", message: "Scale connected." });
         return;
       }
 
       if (!result.found) {
+        if (result.firstError) throw result.firstError;
         setStatus({ type: "error", message: "No scale found after scan." });
         return;
       }
 
-      if (result.requested) {
-        setStatus({ type: "success", message: "Scale connection requested." });
-        return;
-      }
-
-      if (result.scanSawScale && result.firstError) {
-        setStatus({ type: "success", message: "Scale scan requested. Wake the scale if it stays disconnected." });
-        return;
-      }
-
       if (result.firstError) throw result.firstError;
-      setStatus({ type: "success", message: "Scale scan requested. Wake the scale if it stays disconnected." });
+      setStatus({
+        type: "error",
+        message: result.requested
+          ? "Scale was found but did not report connected. Keep it awake and tap Scale again."
+          : "Scale was found but could not be connected. Keep it awake and tap Scale again."
+      });
     } catch (error) {
       setStatus({ type: "error", message: `Could not connect scale: ${errorMessage(error)}` });
     }
@@ -2182,13 +2191,13 @@ export function App() {
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
       try {
-        const result = await requestScaleConnection({ recovery: true });
+        const result = await requestScaleConnection();
         if (result.connected) {
           setStatus({ type: "success", message: "Scale connected. Tap Scale again to tare." });
           return;
         }
         if (result.requested || result.found) {
-          setStatus({ type: "success", message: "Scale connection requested. Tap Scale again after it connects." });
+          setStatus({ type: "error", message: "Scale did not report connected. Keep it awake and tap Scale again." });
           return;
         }
       } catch (connectError) {
@@ -2237,7 +2246,13 @@ export function App() {
   };
 
   if (page === "screensaver") {
-    return <ScreensaverPage title={data.settings.skinTitle} onWake={() => void wakeScreen()} />;
+    return (
+      <ScreensaverPage
+        title={data.settings.skinTitle}
+        brightness={screensaverBrightnessValue(data.settings.screensaverBrightness)}
+        onWake={() => void wakeScreen()}
+      />
+    );
   }
 
   const navIconSize = 20;

@@ -20,15 +20,18 @@ const screensaverPlacements = [
   { panelX: 4, panelY: 34, artPosition: "52% 84%" }
 ] as const;
 
-export function ScreensaverPage({ title, onWake }: { title: string; onWake: () => void }) {
+export function ScreensaverPage({ title, brightness = 8, onWake }: { title: string; brightness?: number; onWake: () => void }) {
   const [artIndex, setArtIndex] = useState(() => Math.floor(Math.random() * screensaverArt.length));
   const art = screensaverArt[artIndex] ?? screensaverArt[0];
   const quote = screensaverQuotes[artIndex % screensaverQuotes.length] ?? screensaverQuotes[0];
   const placement = screensaverPlacements[artIndex % screensaverPlacements.length] ?? screensaverPlacements[0];
+  const normalizedBrightness = Math.min(100, Math.max(0, Math.round(brightness)));
+  const contentBrightness = 0.55 + normalizedBrightness * 0.0045;
   const style = {
     backgroundColor: "#020506",
     "--screensaver-drift-x": `${placement.panelX}px`,
-    "--screensaver-drift-y": `${placement.panelY}px`
+    "--screensaver-drift-y": `${placement.panelY}px`,
+    "--screensaver-content-brightness": contentBrightness.toFixed(3)
   } as CSSProperties;
   const artStyle = {
     backgroundImage: art.backgroundImage,
@@ -48,6 +51,7 @@ export function ScreensaverPage({ title, onWake }: { title: string; onWake: () =
     <main
       className="screensaver"
       aria-label="Screensaver mode"
+      data-brightness={normalizedBrightness}
       style={style}
       onClick={onWake}
       onKeyDown={(event) => {

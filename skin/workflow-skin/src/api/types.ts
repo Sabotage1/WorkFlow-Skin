@@ -197,6 +197,7 @@ export interface DeviceInfo {
   name?: string;
   state?: "connected" | "disconnected" | "discovered" | string;
   type?: "machine" | "scale" | "sensor" | string;
+  available?: boolean;
 }
 
 export interface AppInfo {

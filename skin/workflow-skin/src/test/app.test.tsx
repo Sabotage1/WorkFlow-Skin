@@ -91,6 +91,7 @@ function mockReaFetch(
     communityDownloadPayloads?: Record<string, CommunityDownloadPayload>;
     decentAccount?: DecentAccountStatus;
     connectDeviceStatus?: number | ((context: DeviceConnectContext) => number | undefined);
+    connectDeviceUpdatesState?: boolean;
     sensorExecuteResults?: Array<{ body: unknown; status?: number }>;
     shotDetailsById?: Record<string, ShotRecord>;
     beans?: Bean[];
@@ -322,7 +323,9 @@ function mockReaFetch(
       scanCount += 1;
       devices = typeof options.devicesAfterScan === "function" ? options.devicesAfterScan(context) : options.devicesAfterScan ?? devices;
       sensors = options.sensorsAfterScan ?? sensors;
-      return responseJson(typeof options.scanDevicesResult === "function" ? options.scanDevicesResult(context) : options.scanDevicesResult ?? devices);
+      const scanResult = typeof options.scanDevicesResult === "function" ? options.scanDevicesResult(context) : options.scanDevicesResult ?? devices;
+      if (quickParam === false && options.scanDevicesResult !== undefined) devices = scanResult;
+      return responseJson(scanResult);
     }
     if ((method === "PUT" || method === "POST") && url.pathname === "/api/v1/devices/connect") {
       const body = JSON.parse(String(init.body || "{}")) as { deviceId?: string; id?: string };
@@ -333,6 +336,9 @@ function mockReaFetch(
           : options.connectDeviceStatus;
       if (connectStatus) return Promise.resolve(new Response(`connect failed for ${String(init.body)}`, { status: connectStatus }));
       connectCount += 1;
+      if (options.connectDeviceUpdatesState !== false) {
+        devices = devices.map((device) => (device.id === deviceId ? { ...device, state: "connected", available: true } : device));
+      }
       return Promise.resolve(new Response("", { status: 200 }));
     }
     if (method === "GET" && url.pathname === "/api/v1/display") return responseJson(displayState);
@@ -1496,7 +1502,7 @@ describe("App shell", () => {
 
     await waitFor(() => {
       expect(fetchState.fetchMock).toHaveBeenCalledWith(
-        "http://localhost:8080/api/v1/devices/scan?connect=true&quick=true",
+        "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
         expect.objectContaining({ method: "GET" })
       );
     });
@@ -1540,10 +1546,10 @@ describe("App shell", () => {
       {
         machineState: { connected: true, state: { state: "sleeping", substate: "idle" } },
         devices: [],
-        scanDevicesResult: ({ quick }) =>
-          quick
-            ? [{ id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" }]
-            : [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }]
+        scanDevicesResult: [
+          { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered", available: true },
+          { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true }
+        ]
       }
     );
     render(<App />);
@@ -1563,7 +1569,6 @@ describe("App shell", () => {
     });
 
     expect(fetchState.scanRequests.map((request) => request.path)).toEqual([
-      "/api/v1/devices/scan?connect=true&quick=true",
       "/api/v1/devices/scan?connect=true&quick=false"
     ]);
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
@@ -2494,7 +2499,7 @@ describe("App shell", () => {
 
     await waitFor(() => expect(fetchState.savedSettings.r2SensorId).toBe("F4:12:FA:FA:AC:E3"));
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
     );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
@@ -2537,7 +2542,7 @@ describe("App shell", () => {
 
     await waitFor(() => expect(fetchState.savedSettings.r2SensorId).toBe("F4:12:FA:FA:AC:E3"));
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
     );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
@@ -2546,12 +2551,14 @@ describe("App shell", () => {
     );
   });
 
-  it("requests the configured R2 connection immediately when the disconnected R2 status is pressed", async () => {
+  it("discovers the configured R2 before requesting its connection", async () => {
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         sensors: [],
-        devices: []
+        devices: [],
+        sensorsAfterScan: [detectedR2Sensor],
+        scanDevicesResult: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true }]
       }
     );
     render(<App />);
@@ -2569,37 +2576,27 @@ describe("App shell", () => {
             init.body === JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" })
         );
         const scanIndex = fetchState.fetchMock.mock.calls.findIndex(([url]) => String(url).includes("/api/v1/devices/scan"));
-        expect(connectIndex).toBeGreaterThanOrEqual(0);
         expect(scanIndex).toBeGreaterThanOrEqual(0);
-        expect(connectIndex).toBeLessThan(scanIndex);
+        expect(connectIndex).toBeGreaterThan(scanIndex);
       },
-      { timeout: 1200 }
+      { timeout: 2500 }
     );
   });
 
   it("runs the startup discovery sequence when pressing R2 after it was powered on late", async () => {
     let poweredOn = false;
-    let sawPoweredQuickScan = false;
-    const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" };
+    const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true };
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         devices: [],
         sensorsAfterScan: [detectedR2Sensor],
-        scanDevicesResult: ({ quickParam }) => {
-          if (!poweredOn) return [];
-          if (quickParam === true) {
-            sawPoweredQuickScan = true;
-            return [];
-          }
-          if (quickParam === false && sawPoweredQuickScan) return [r2Device];
-          return [];
-        }
+        scanDevicesResult: ({ quickParam }) => (poweredOn && quickParam === false ? [r2Device] : [])
       }
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     poweredOn = true;
     const scansBeforePress = fetchState.scanRequests.length;
 
@@ -2611,29 +2608,26 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
       );
     });
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 2));
-    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 2).map((request) => request.path)).toEqual([
-      "/api/v1/devices/scan?connect=true&quick=true",
-      "/api/v1/devices/scan?connect=true&quick=false"
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 1));
+    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 1).map((request) => request.path)).toEqual([
+      "/api/v1/devices/scan?connect=false&quick=false"
     ]);
   });
 
   it("keeps scanning for R2 from the indicator after wake when the first post-wake scans miss it", async () => {
     let poweredOn = false;
-    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
-    const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" };
+    const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true };
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3", screensaverBrightness: 8 },
       {
         devices: [],
         sensorsAfterScan: [detectedR2Sensor],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [r2Device] : []),
-        connectDeviceStatus: ({ deviceId, scanCount }) => (deviceId === "F4:12:FA:FA:AC:E3" && scanCount < scansBeforeIndicatorPress + 8 ? 404 : undefined)
+        scanDevicesResult: () => (poweredOn ? [r2Device] : [])
       }
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
     expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
 
@@ -2641,11 +2635,23 @@ describe("App shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
     await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThan(scansBeforeWake));
 
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+    });
     poweredOn = true;
-    scansBeforeIndicatorPress = fetchState.scanCount;
+    fetchState.fetchMock.mockClear();
+    const scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(await screen.findByRole("button", { name: "R2" }));
 
-    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8), { timeout: 10000 });
+    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 1), { timeout: 5000 });
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=true",
+      expect.anything()
+    );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
@@ -2653,30 +2659,27 @@ describe("App shell", () => {
     expect(fetchState.connectCount).toBeGreaterThan(0);
   });
 
-  it("refreshes R2 when pressing a stale connected R2 indicator after it was powered on late", async () => {
+  it("ignores an unavailable remembered R2 and connects it after it is powered on", async () => {
     let poweredOn = false;
-    let sawPoweredQuickScan = false;
-    const r2Device = (state: string): DeviceInfo => ({ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state });
+    const r2Device = (state: string, available: boolean): DeviceInfo => ({
+      id: "F4:12:FA:FA:AC:E3",
+      name: "DiFluid R2",
+      type: "sensor",
+      state,
+      available
+    });
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
-        devices: [r2Device("connected")],
+        devices: [r2Device("disconnected", false)],
         sensorsAfterScan: [detectedR2Sensor],
-        scanDevicesResult: ({ quickParam }) => {
-          if (!poweredOn) return [];
-          if (quickParam === true) {
-            sawPoweredQuickScan = true;
-            return [];
-          }
-          if (quickParam === false && sawPoweredQuickScan) return [r2Device("discovered")];
-          return [];
-        }
+        scanDevicesResult: () => (poweredOn ? [r2Device("discovered", true)] : [])
       }
     );
     render(<App />);
 
-    expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Connected");
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     poweredOn = true;
     const scansBeforePress = fetchState.scanRequests.length;
 
@@ -2688,10 +2691,9 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "F4:12:FA:FA:AC:E3" }) })
       );
     });
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 2));
-    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 2).map((request) => request.path)).toEqual([
-      "/api/v1/devices/scan?connect=true&quick=true",
-      "/api/v1/devices/scan?connect=true&quick=false"
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(scansBeforePress + 1));
+    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 1).map((request) => request.path)).toEqual([
+      "/api/v1/devices/scan?connect=false&quick=false"
     ]);
   });
 
@@ -2723,7 +2725,8 @@ describe("App shell", () => {
       {
         sensors: [detectedR2Sensor],
         devices: [],
-        scanDevicesResult: ({ scanCount }) => (scanCount < 2 ? [] : [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }]),
+        scanDevicesResult: ({ scanCount }) =>
+          scanCount < 1 ? [] : [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true }],
         sensorsAfterScan: [detectedR2Sensor]
       }
     );
@@ -2742,29 +2745,32 @@ describe("App shell", () => {
 
   it("keeps refreshing R2 after the indicator connect until the native device shows connected", async () => {
     let allowConnected = false;
-    let scansBeforePress = Number.POSITIVE_INFINITY;
-    const r2Device = (state: string): DeviceInfo => ({ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state });
+    const r2Device = (state: string, available = true): DeviceInfo => ({
+      id: "F4:12:FA:FA:AC:E3",
+      name: "DiFluid R2",
+      type: "sensor",
+      state,
+      available
+    });
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         sensors: [],
-        devices: [r2Device("disconnected")],
-        devicesAfterScan: ({ scanCount }) => [r2Device(allowConnected && scanCount > scansBeforePress + 1 ? "connected" : "discovered")],
-        scanDevicesResult: ({ scanCount }) => [r2Device(allowConnected && scanCount > scansBeforePress + 1 ? "connected" : "discovered")]
+        devices: [r2Device("disconnected", false)],
+        scanDevicesResult: () => (allowConnected ? [r2Device("discovered")] : [])
       }
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(1));
     expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
 
     allowConnected = true;
-    scansBeforePress = fetchState.scanCount;
     await userEvent.click(screen.getByRole("button", { name: "R2" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Connected"), { timeout: 3500 });
     expect(fetchState.connectCount).toBeGreaterThan(0);
-    expect(fetchState.scanCount).toBeGreaterThan(3);
+    expect(fetchState.scanCount).toBeGreaterThan(1);
   });
 
   it("reveals the machine IP when the WiFi status is pressed", async () => {
@@ -2794,21 +2800,27 @@ describe("App shell", () => {
   });
 
   it("tries to force scale connection when the disconnected Scale status is pressed", async () => {
+    let poweredOn = false;
+    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia", type: "scale", state: "discovered", available: true };
     const fetchState = mockReaFetch(initialSettings, {
-      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected" }]
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected", available: false }],
+      scanDevicesResult: () => (poweredOn ? [scaleDevice] : [])
     });
     render(<App />);
 
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    poweredOn = true;
+    fetchState.fetchMock.mockClear();
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connection requested."), { timeout: 2500 });
-    expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=true",
-      expect.objectContaining({ method: "GET" })
-    );
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
       expect.objectContaining({ method: "GET" })
+    );
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=true",
+      expect.anything()
     );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
@@ -2838,14 +2850,14 @@ describe("App shell", () => {
 
   it("runs the startup discovery sequence when pressing Scale after it was powered on late", async () => {
     let poweredOn = false;
-    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" };
+    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered", available: true };
     const fetchState = mockReaFetch(initialSettings, {
       devices: [],
       scanDevicesResult: ({ quickParam }) => (poweredOn && quickParam === false ? [scaleDevice] : [])
     });
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     poweredOn = true;
     const scansBeforePress = fetchState.scanRequests.length;
 
@@ -2857,8 +2869,7 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
       );
     });
-    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 2).map((request) => request.path)).toEqual([
-      "/api/v1/devices/scan?connect=true&quick=true",
+    expect(fetchState.scanRequests.slice(scansBeforePress, scansBeforePress + 1).map((request) => request.path)).toEqual([
       "/api/v1/devices/scan?connect=true&quick=false"
     ]);
     expect(fetchState.scaleTareCount).toBe(0);
@@ -2866,18 +2877,17 @@ describe("App shell", () => {
 
   it("keeps scanning for Scale from the indicator after wake when the first post-wake scans miss it", async () => {
     let poweredOn = false;
-    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
-    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered" };
+    const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered", available: true };
     const fetchState = mockReaFetch(
       { ...initialSettings, screensaverBrightness: 8 },
       {
         devices: [],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [scaleDevice] : [])
+        scanDevicesResult: () => (poweredOn ? [scaleDevice] : [])
       }
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
     expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
 
@@ -2885,8 +2895,12 @@ describe("App shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
     await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThan(scansBeforeWake));
 
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+    });
     poweredOn = true;
-    scansBeforeIndicatorPress = fetchState.scanCount;
+    fetchState.fetchMock.mockClear();
+    const scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
     await waitFor(
@@ -2896,35 +2910,41 @@ describe("App shell", () => {
           expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
         );
       },
-      { timeout: 10000 }
+      { timeout: 5000 }
     );
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8);
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 1);
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
   it("keeps scanning for Scale after wake when a stale scale id returns device not found", async () => {
     let poweredOn = false;
-    let scansBeforeIndicatorPress = Number.POSITIVE_INFINITY;
-    const staleScale: DeviceInfo = { id: "D4:41:89:DB:21:2E", name: "Acaia Pearl", type: "scale", state: "disconnected" };
-    const recoveredScale: DeviceInfo = { id: "scale-after-wake", name: "Acaia Pearl", type: "scale", state: "discovered" };
+    const staleScale: DeviceInfo = { id: "D4:41:89:DB:21:2E", name: "Acaia Pearl", type: "scale", state: "disconnected", available: false };
+    const recoveredScale: DeviceInfo = { id: "scale-after-wake", name: "Acaia Pearl", type: "scale", state: "discovered", available: true };
     const fetchState = mockReaFetch(
       { ...initialSettings, screensaverBrightness: 8 },
       {
         devices: [staleScale],
-        scanDevicesResult: ({ scanCount }) => (poweredOn && scanCount >= scansBeforeIndicatorPress + 7 ? [recoveredScale] : []),
-        connectDeviceStatus: ({ deviceId }) => (deviceId === staleScale.id ? 404 : undefined)
+        scanDevicesResult: () => (poweredOn ? [recoveredScale] : [])
       }
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
     await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
     expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Not connected"));
 
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+    });
     poweredOn = true;
-    scansBeforeIndicatorPress = fetchState.scanCount;
+    fetchState.fetchMock.mockClear();
+    const scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(screen.getByRole("button", { name: "Scale" }));
 
     await waitFor(
@@ -2934,10 +2954,14 @@ describe("App shell", () => {
           expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-after-wake" }) })
         );
       },
-      { timeout: 10000 }
+      { timeout: 5000 }
     );
     expect(screen.queryByText(/Could not connect scale/i)).not.toBeInTheDocument();
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 8);
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: staleScale.id }) })
+    );
+    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 1);
   });
 
   it("tares the scale when the connected Scale status is pressed", async () => {
@@ -2971,16 +2995,21 @@ describe("App shell", () => {
   });
 
   it("connects a scale returned only by the scan response", async () => {
+    let poweredOn = false;
     const fetchState = mockReaFetch(initialSettings, {
       devices: [],
-      scanDevicesResult: [{ id: "acaia-lunar", name: "Acaia Lunar", type: "sensor", state: "discovered" }]
+      scanDevicesResult: () =>
+        poweredOn ? [{ id: "acaia-lunar", name: "Acaia Lunar", type: "sensor", state: "discovered", available: true }] : []
     });
     render(<App />);
 
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    poweredOn = true;
+    fetchState.fetchMock.mockClear();
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=true",
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
       expect.objectContaining({ method: "GET" })
     );
     await waitFor(() => {
@@ -2989,7 +3018,7 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "acaia-lunar" }) })
       );
     });
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connection requested."), { timeout: 2500 });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
   });
 
   it("keeps force scale connection usable when explicit connect returns 404 after scan", async () => {
@@ -3002,12 +3031,11 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale scan requested. Wake the scale if it stays disconnected."), {
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not connect scale:"), {
       timeout: 2500
     });
-    expect(screen.queryByText(/Could not connect scale/i)).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=true",
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
       expect.objectContaining({ method: "GET" })
     );
   });

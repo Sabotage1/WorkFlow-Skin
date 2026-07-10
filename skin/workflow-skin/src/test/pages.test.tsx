@@ -1357,9 +1357,12 @@ describe("ScreensaverPage", () => {
   it("has 15 dark generated coffee pictures for sleep mode", () => {
     expect(screensaverArt).toHaveLength(15);
     expect(screensaverQuotes.length).toBeGreaterThanOrEqual(15);
-    render(<ScreensaverPage title="WorkFlow" onWake={vi.fn()} />);
+    render(<ScreensaverPage title="WorkFlow" brightness={20} onWake={vi.fn()} />);
 
-    expect(screen.getByLabelText("Screensaver mode")).toHaveStyle({ backgroundColor: "#020506" });
+    const screensaver = screen.getByLabelText("Screensaver mode");
+    expect(screensaver).toHaveStyle({ backgroundColor: "#020506" });
+    expect(screensaver).toHaveAttribute("data-brightness", "20");
+    expect(screensaver.style.getPropertyValue("--screensaver-content-brightness")).toBe("0.640");
   });
 
   it("always shows the WorkFlow brand on the screensaver", () => {

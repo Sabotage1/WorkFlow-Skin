@@ -12,7 +12,8 @@ async function routeProfileEditorApi(page: Page) {
     reviewEnabledByProfile: {},
     profileWorkflows: {},
     shownProfileIds: profiles.map((profile) => profile.id),
-    skinTitle: "WorkFlow"
+    skinTitle: "WorkFlow",
+    screensaverBrightness: 24
   };
 
   await page.route("**/api/v1/**", async (route) => {
@@ -31,6 +32,10 @@ async function routeProfileEditorApi(page: Page) {
     else if (method === "GET" && url.pathname === "/api/v1/devices") body = [];
     else if (method === "GET" && url.pathname === "/api/v1/info") body = { localIp: "192.168.1.20", version: "0.7.6" };
     else if (method === "GET" && url.pathname === "/api/v1/display") body = { brightness: 100, wakeLockOverride: true };
+    else if (method === "PUT" && url.pathname === "/api/v1/display/brightness") {
+      const brightness = JSON.parse(request.postData() ?? "{}").brightness;
+      body = { brightness, requestedBrightness: brightness, wakeLockOverride: false };
+    }
     else if (method === "GET" && url.pathname === "/api/v1/plugins") body = [];
     else if (method === "GET" && url.pathname === "/api/v1/webui/skins") body = [{ id: "workflow-skin", name: "WorkFlow", version: "0.1.24" }];
     else if (method === "GET" && url.pathname === "/api/v1/webui/skins/default") body = { id: "workflow-skin", name: "WorkFlow", version: "0.1.24" };
@@ -84,6 +89,35 @@ test("preset editor keeps long profile lists scrollable inside the dialog", asyn
     element.scrollTop = 180;
   });
   await expect.poll(() => picker.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+});
+
+test("screensaver uses the saved brightness and fills the viewport", async ({ page }) => {
+  await routeProfileEditorApi(page);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sleep machine" }).click();
+
+  const screensaver = page.getByLabel("Screensaver mode");
+  await expect(screensaver).toHaveAttribute("data-brightness", "24");
+  const metrics = await screensaver.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const panel = element.querySelector(".screensaver-panel");
+    return {
+      top: box.top,
+      left: box.left,
+      width: box.width,
+      height: box.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      panelFilter: panel ? getComputedStyle(panel).filter : ""
+    };
+  });
+
+  expect(metrics.top).toBe(0);
+  expect(metrics.left).toBe(0);
+  expect(metrics.width).toBe(metrics.viewportWidth);
+  expect(metrics.height).toBe(metrics.viewportHeight);
+  expect(metrics.panelFilter).toBe("brightness(0.658)");
 });
 
 test("preset editor assigns a profile when a visible profile row is clicked", async ({ page }) => {

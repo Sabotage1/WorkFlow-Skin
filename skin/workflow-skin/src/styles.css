@@ -972,6 +972,7 @@ button {
   background-repeat: no-repeat;
   background-size: cover;
   opacity: .68;
+  filter: brightness(var(--screensaver-content-brightness, 1));
   transform: translate3d(var(--screensaver-art-drift-x, 0), var(--screensaver-art-drift-y, 0), 0);
   transition: transform 900ms ease, background-position 900ms ease;
   will-change: transform, background-position;
@@ -990,6 +991,7 @@ button {
   background: rgb(2 5 6 / 58%);
   box-shadow: 0 18px 52px rgb(0 0 0 / 38%);
   text-align: center;
+  filter: brightness(var(--screensaver-content-brightness, 1));
   transform: translate3d(var(--screensaver-drift-x, 0), var(--screensaver-drift-y, 0), 0);
   transition: transform 900ms ease;
   will-change: transform;
