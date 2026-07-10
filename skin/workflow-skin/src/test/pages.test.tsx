@@ -117,6 +117,49 @@ describe("BrewPage", () => {
 });
 
 describe("LivePage", () => {
+  it("shows the Work Flow run card above the live graph only for Work Flow brews", () => {
+    const workflowRun = {
+      workflow: {
+        id: "americano",
+        name: "Morning Americano",
+        steps: [
+          { id: "brew", type: "brew" as const, profileId: "p1" },
+          { id: "water", type: "hotWater" as const, volumeMl: 120, temperatureC: 82 }
+        ]
+      },
+      currentStepIndex: 0,
+      phase: "running" as const,
+      message: "Brewing Blooming."
+    };
+    const props = {
+      workflow: { profile: profiles[0].profile },
+      activeProfile: profiles[0],
+      latestShot: null,
+      liveMeasurements: [],
+      scaleSnapshot: null
+    };
+    const { container, rerender } = render(
+      <LivePage
+        {...props}
+        drinkWorkflowRun={workflowRun}
+        drinkWorkflowProfiles={profiles}
+        onCancelDrinkWorkflow={vi.fn()}
+      />
+    );
+
+    const workflowGrid = container.querySelector(".live-grid");
+    expect(workflowGrid?.children[0]).toHaveClass("workflow-run-panel", "running");
+    expect(workflowGrid?.children[1]).toHaveClass("workflow-live-graph");
+    expect(screen.getByRole("region", { name: "Work Flow run" })).toHaveTextContent("Morning Americano");
+    expect(screen.getByRole("region", { name: "Work Flow run" })).toHaveTextContent("Brew Profile");
+
+    rerender(<LivePage {...props} />);
+
+    expect(screen.queryByRole("region", { name: "Work Flow run" })).not.toBeInTheDocument();
+    expect(container.querySelector(".live-grid")?.children[0]).toHaveClass("live-hero");
+    expect(container.querySelector(".workflow-live-graph")).not.toBeInTheDocument();
+  });
+
   it("renders a nonblank waiting state when no live samples are available", () => {
     render(<LivePage workflow={{ context: { targetDoseWeight: 18, targetYield: 36 } }} latestShot={null} liveMeasurements={[]} scaleSnapshot={null} />);
 

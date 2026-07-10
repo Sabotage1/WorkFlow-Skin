@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiWebSocketBaseUrl } from "../api/reaprime";
 import type { ShotSnapshot, WaterLevels, WeightSnapshot } from "../api/types";
 import { appendLiveMeasurement } from "../lib/liveMeasurements";
@@ -92,6 +92,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
   const lastScaleRef = useRef<WeightSnapshot | null>(null);
   const recordIdleRef = useRef(options.recordIdle ?? false);
   const brewingRef = useRef(false);
+  const getLatestScaleSnapshot = useCallback(() => lastScaleRef.current, []);
 
   useEffect(() => {
     recordIdleRef.current = options.recordIdle ?? false;
@@ -149,5 +150,5 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     };
   }, [baseUrl]);
 
-  return { measurements, scaleSnapshot, scaleConnected, waterLevels, machineMode };
+  return { measurements, scaleSnapshot, scaleConnected, waterLevels, machineMode, getLatestScaleSnapshot };
 }

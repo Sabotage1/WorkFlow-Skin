@@ -1053,7 +1053,7 @@ describe("App shell", () => {
     const navigation = await screen.findByRole("navigation", { name: "Workflow navigation" });
     const labels = Array.from(navigation.querySelectorAll(".nav-button")).map((button) => button.getAttribute("aria-label"));
 
-    expect(labels).toEqual(["Collapse menu", "Brew", "Profiles", "Grinders", "Review", "Bags", "Community", "Settings"]);
+    expect(labels).toEqual(["Collapse menu", "Brew", "Profiles", "Grinders", "Review", "Bags", "Work Flows", "Community", "Settings"]);
     expect(screen.queryByRole("button", { name: "History" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steam" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Live" })).not.toBeInTheDocument();

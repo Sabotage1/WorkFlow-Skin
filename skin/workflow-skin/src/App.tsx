@@ -13,7 +13,8 @@ import {
   PanelLeftOpen,
   Settings,
   SlidersHorizontal,
-  Users
+  Users,
+  Workflow as WorkflowIcon
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import skinManifest from "../skin-manifest.json";
@@ -47,6 +48,19 @@ import type { Bag } from "./lib/bags";
 import { buildConnectivityStatuses } from "./lib/connectivity";
 import type { ConnectivityStatus } from "./lib/connectivity";
 import { trimLiveGraphWarmup } from "./lib/liveMeasurements";
+import {
+  DrinkWorkflowCanceledError,
+  runDrinkWorkflow as executeDrinkWorkflow
+} from "./lib/drinkWorkflowRunner";
+import {
+  IDLE_DRINK_WORKFLOW_RUN,
+  attachDrinkWorkflowToShot,
+  drinkWorkflowDetailsFromShot,
+  drinkWorkflowStepLabel,
+  validateDrinkWorkflow,
+  type DrinkWorkflow,
+  type DrinkWorkflowRunState
+} from "./lib/drinkWorkflows";
 import { machineModeLabel, machineTemperature } from "./lib/machineState";
 import { isBrewingMode, isIdleMode, isSleepingMode, isSteamingMode, shouldPollMachineState, workflowActivityForMode } from "./lib/machineMode";
 import { grindSizeFromShot, shotStats } from "./lib/shotStats";
@@ -62,6 +76,7 @@ import { ReviewPage } from "./pages/ReviewPage";
 import { ScreensaverPage } from "./pages/ScreensaverPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SteamPage } from "./pages/SteamPage";
+import { WorkflowsPage } from "./pages/WorkflowsPage";
 import {
   MAIN_MENU_ITEM_LABELS,
   activeSkinTheme,
@@ -119,6 +134,7 @@ interface TopStatusIndicator {
 
 const navById: Record<MainMenuItemId, { label: string; icon: React.ComponentType<{ className?: string; size?: number }> }> = {
   brew: { label: MAIN_MENU_ITEM_LABELS.brew, icon: Coffee },
+  workflows: { label: MAIN_MENU_ITEM_LABELS.workflows, icon: WorkflowIcon },
   live: { label: MAIN_MENU_ITEM_LABELS.live, icon: Activity },
   review: { label: MAIN_MENU_ITEM_LABELS.review, icon: NotebookPen },
   steam: { label: MAIN_MENU_ITEM_LABELS.steam, icon: Flame },
@@ -680,6 +696,9 @@ export function App() {
   const [uploadedCommunityProfiles, setUploadedCommunityProfiles] = useState<UploadedCommunityProfile[]>([]);
   const [decentAccount, setDecentAccount] = useState<DecentAccountStatus | null>(null);
   const [communityInitialDraft, setCommunityInitialDraft] = useState<Partial<UploadDraft> | null>(null);
+  const [drinkWorkflowRun, setDrinkWorkflowRun] = useState<DrinkWorkflowRunState>(IDLE_DRINK_WORKFLOW_RUN);
+  const [selectedPresetWorkflowId, setSelectedPresetWorkflowId] = useState<string | undefined>();
+  const [presetEditorMode, setPresetEditorMode] = useState<"profile" | "workflow">("profile");
   const startupProfileApplyRef = useRef<{ profileId: string | null; attempts: number; pending: boolean; complete: boolean }>({
     profileId: null,
     attempts: 0,
@@ -706,6 +725,8 @@ export function App() {
   const lastLoggedMachineModeRef = useRef<string | null>(null);
   const wasSleepingRef = useRef<boolean | null>(null);
   const wakeScreenStartupResetUntilRef = useRef(0);
+  const drinkWorkflowRunTokenRef = useRef(0);
+  const drinkWorkflowBusyRef = useRef(false);
   const scaleReconnectRef = useRef<{ signature: string | null; lastAttemptAt: number; pending: boolean }>({
     signature: null,
     lastAttemptAt: 0,
@@ -753,17 +774,32 @@ export function App() {
     );
     return shownProfiles.filter((profile) => !assignedProfileIds.has(profile.id));
   }, [data.settings.presetSlots, editingSlotIndex, shownProfiles]);
+  const presetPickerDrinkWorkflows = useMemo(() => {
+    if (editingSlotIndex === null) return data.settings.drinkWorkflows;
+    const assignedWorkflowIds = new Set(
+      data.settings.presetSlots
+        .map((slot, index) => (index === editingSlotIndex ? undefined : slot.drinkWorkflowId))
+        .filter((workflowId): workflowId is string => Boolean(workflowId))
+    );
+    return data.settings.drinkWorkflows.filter((workflow) => !assignedWorkflowIds.has(workflow.id));
+  }, [data.settings.drinkWorkflows, data.settings.presetSlots, editingSlotIndex]);
   const machineConnected = Boolean(machineStateForStatus && machineStateForStatus.connected !== false);
   const machineStateForWater: MachineState | null = fastMachineState
     ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
     : data.machineState;
   const currentMachineMode = fastMachineState?.state?.state ?? liveTelemetry.machineMode?.state ?? data.machineState?.state?.state;
+  const drinkWorkflowBusy =
+    drinkWorkflowRun.phase === "preparing" ||
+    drinkWorkflowRun.phase === "starting" ||
+    drinkWorkflowRun.phase === "running" ||
+    drinkWorkflowRun.phase === "between";
   const waterLow = waterRefillRequired(machineStateForWater, liveTelemetry.waterLevels);
   const waterLowDetail = waterRefillMessage(machineStateForWater, liveTelemetry.waterLevels);
   const machineSleeping = isSleepingMode(currentMachineMode) || isSleepingMachine(data.machineState);
   const brewingCoffee = isBrewingMode(currentMachineMode);
   const holdingCompletedBrewOnLivePage = page === "live" && !brewingCoffee && completedActivityRef.current?.activity === "brew";
-  const showLivePage = page === "live" && (brewingCoffee || holdingCompletedBrewOnLivePage);
+  const workflowLiveVisible = Boolean(drinkWorkflowRun.workflow && drinkWorkflowBusy);
+  const showLivePage = page === "live" && (brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible);
   const steamingMilk = isSteamingMode(currentMachineMode);
   const statuses = useMemo(
     () =>
@@ -782,8 +818,8 @@ export function App() {
     [nativeDevices, machineStateForStatus, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
   );
   const visibleMenuIds = useMemo(
-    () => visibleMainMenuItems(data.settings).filter((itemId) => itemId !== "live" || brewingCoffee || holdingCompletedBrewOnLivePage),
-    [brewingCoffee, data.settings.mainMenuItems, data.settings.hiddenMainMenuItemIds, holdingCompletedBrewOnLivePage]
+    () => visibleMainMenuItems(data.settings).filter((itemId) => itemId !== "live" || brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible),
+    [brewingCoffee, data.settings.mainMenuItems, data.settings.hiddenMainMenuItemIds, holdingCompletedBrewOnLivePage, workflowLiveVisible]
   );
   const menuSkinVersion = CURRENT_SKIN_VERSION;
   const topStatusIndicators = useMemo(
@@ -1213,7 +1249,7 @@ export function App() {
       startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
     }
 
-    if (machineSleeping) return;
+    if (machineSleeping || drinkWorkflowBusyRef.current) return;
 
     if (startupProfileApplyRef.current.complete) return;
 
@@ -1295,11 +1331,13 @@ export function App() {
 
   useEffect(() => {
     if (!data.loaded || page === "live" || page === "screensaver") return;
+    if (drinkWorkflowBusyRef.current) return;
     if (brewingCoffee) setPage("live");
   }, [brewingCoffee, data.loaded, page]);
 
   useEffect(() => {
     if (!data.loaded || page !== "live" || brewingCoffee) return;
+    if (drinkWorkflowBusyRef.current) return;
     if (completedActivityRef.current?.activity === "brew" || completedActivityRoutingRef.current || completedActivityTimerRef.current !== null) return;
     if (latestShot) {
       const fallbackReviewShot = shotWithFallbackMeasurements(latestShot, liveTelemetry.measurements);
@@ -1393,6 +1431,15 @@ export function App() {
 
   useEffect(() => {
     if (!data.loaded) return;
+
+    if (drinkWorkflowBusyRef.current) {
+      completedActivityRef.current = null;
+      if (completedActivityTimerRef.current !== null) {
+        window.clearTimeout(completedActivityTimerRef.current);
+        completedActivityTimerRef.current = null;
+      }
+      return;
+    }
 
     const activeActivity = workflowActivityForMode(currentMachineMode);
     if (activeActivity) {
@@ -1589,6 +1636,157 @@ export function App() {
     });
   };
 
+  const saveDrinkWorkflow = async (workflow: DrinkWorkflow) => {
+    const errors = validateDrinkWorkflow(workflow, new Set(data.profiles.map((profile) => profile.id)));
+    if (errors.length > 0) throw new Error(errors[0].message);
+    const exists = data.settings.drinkWorkflows.some((item) => item.id === workflow.id);
+    const drinkWorkflows = exists
+      ? data.settings.drinkWorkflows.map((item) => (item.id === workflow.id ? workflow : item))
+      : [...data.settings.drinkWorkflows, workflow];
+    try {
+      await data.persistSettings({ ...data.settings, drinkWorkflows });
+      setStatus({ type: "success", message: `${workflow.name} saved.` });
+    } catch (error) {
+      setStatus({ type: "error", message: `Could not save Work Flow: ${errorMessage(error)}` });
+      throw error;
+    }
+  };
+
+  const deleteDrinkWorkflow = async (workflowId: string) => {
+    const workflow = data.settings.drinkWorkflows.find((item) => item.id === workflowId);
+    try {
+      await data.persistSettings({
+        ...data.settings,
+        drinkWorkflows: data.settings.drinkWorkflows.filter((item) => item.id !== workflowId),
+        presetSlots: data.settings.presetSlots.map((slot) => {
+          if (slot.drinkWorkflowId !== workflowId) return slot;
+          const { drinkWorkflowId: _drinkWorkflowId, ...rest } = slot;
+          return rest;
+        })
+      });
+      setSelectedPresetWorkflowId((current) => (current === workflowId ? undefined : current));
+      setStatus({ type: "success", message: `${workflow?.name ?? "Work Flow"} deleted.` });
+    } catch (error) {
+      setStatus({ type: "error", message: `Could not delete Work Flow: ${errorMessage(error)}` });
+      throw error;
+    }
+  };
+
+  const startDrinkWorkflow = async (workflow: DrinkWorkflow) => {
+    if (drinkWorkflowBusyRef.current) return;
+    const errors = validateDrinkWorkflow(workflow, new Set(data.profiles.map((profile) => profile.id)));
+    if (errors.length > 0) {
+      setStatus({ type: "error", message: errors[0].message });
+      return;
+    }
+    if (!machineConnected) {
+      setStatus({ type: "error", message: "Connect the machine before starting a Work Flow." });
+      return;
+    }
+    if (waterLow) {
+      setStatus({ type: "error", message: "Refill the water tank before starting a Work Flow." });
+      return;
+    }
+    if (!isIdleMode(currentMachineMode)) {
+      setStatus({ type: "error", message: "Wait for the machine to become idle before starting a Work Flow." });
+      return;
+    }
+
+    const token = drinkWorkflowRunTokenRef.current + 1;
+    drinkWorkflowRunTokenRef.current = token;
+    drinkWorkflowBusyRef.current = true;
+    completedActivityRef.current = null;
+    completedActivityRoutingRef.current = false;
+    if (completedActivityTimerRef.current !== null) {
+      window.clearTimeout(completedActivityTimerRef.current);
+      completedActivityTimerRef.current = null;
+    }
+    setStatus(null);
+    setPage("live");
+    setDrinkWorkflowRun({ workflow, currentStepIndex: 0, phase: "preparing", message: `Preparing ${workflow.name}.` });
+    skinLog("drink_workflow_started", { workflowId: workflow.id, name: workflow.name, steps: workflow.steps.map((step) => step.type) });
+
+    try {
+      const result = await executeDrinkWorkflow({
+        api,
+        workflow,
+        profiles: data.profiles,
+        isCanceled: () => drinkWorkflowRunTokenRef.current !== token,
+        onState: (next) => {
+          if (drinkWorkflowRunTokenRef.current === token) setDrinkWorkflowRun(next);
+        },
+        onBrewProfileSelected: (profileId) => {
+          manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId };
+          startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
+          setStartupProfileHoldId(null);
+        },
+        onWorkflowUpdated: data.setWorkflow,
+        getScaleSnapshot: liveTelemetry.getLatestScaleSnapshot
+      });
+      if (drinkWorkflowRunTokenRef.current === token) {
+        const completedAt = new Date().toISOString();
+        let reviewTarget: ShotRecord | null = null;
+        let detailSaveFailures = 0;
+        for (const runShot of result.brewShots) {
+          const fullShot = await api.getShot(runShot.id).catch(() => runShot);
+          const taggedShot = attachDrinkWorkflowToShot(fullShot, workflow, data.profiles, completedAt);
+          try {
+            const updatedShot = await api.updateShot(taggedShot.id, { workflow: taggedShot.workflow });
+            reviewTarget = mergeReviewShot(taggedShot, updatedShot) ?? taggedShot;
+          } catch (error) {
+            detailSaveFailures += 1;
+            reviewTarget = taggedShot;
+            skinLog("drink_workflow_shot_details_save_failed", { workflowId: workflow.id, shotId: taggedShot.id, error: errorMessage(error) });
+          }
+        }
+
+        skinLog("drink_workflow_completed", { workflowId: workflow.id, brewShotIds: result.brewShots.map((shot) => shot.id), detailSaveFailures });
+        if (reviewTarget) {
+          setCompletedReviewShot(reviewTarget);
+          setLastCompletedProfileId(selectedProfileIdFromWorkflow(reviewTarget.workflow, data.profiles));
+          if (r2Available) {
+            autoReadR2ShotIdRef.current = reviewTarget.id;
+            setAutoReadR2ShotId(reviewTarget.id);
+          }
+          setPage("review");
+        }
+        setStatus(
+          detailSaveFailures > 0
+            ? { type: "error", message: `${workflow.name} finished. Save the review to retry saving its Work Flow details.` }
+            : { type: "success", message: `${workflow.name} complete.` }
+        );
+      }
+    } catch (error) {
+      if (error instanceof DrinkWorkflowCanceledError || drinkWorkflowRunTokenRef.current !== token) return;
+      const message = errorMessage(error);
+      setDrinkWorkflowRun((current) => ({ ...current, workflow, currentStepIndex: Math.max(0, current.currentStepIndex), phase: "error", message }));
+      setStatus({ type: "error", message });
+      setPage("workflows");
+      skinLog("drink_workflow_failed", { workflowId: workflow.id, error: message });
+      await api.requestMachineState("idle").catch(() => undefined);
+    } finally {
+      if (drinkWorkflowRunTokenRef.current === token) drinkWorkflowBusyRef.current = false;
+      await data.refresh().catch(() => undefined);
+    }
+  };
+
+  const cancelDrinkWorkflow = async () => {
+    const workflow = drinkWorkflowRun.workflow;
+    if (!workflow || !drinkWorkflowBusyRef.current) return;
+    drinkWorkflowRunTokenRef.current += 1;
+    drinkWorkflowBusyRef.current = false;
+    setDrinkWorkflowRun((current) => ({ ...current, phase: "canceled", message: `${workflow.name} canceled.` }));
+    setPage("workflows");
+    skinLog("drink_workflow_canceled", { workflowId: workflow.id, currentStepIndex: drinkWorkflowRun.currentStepIndex });
+    try {
+      await api.requestMachineState("idle");
+      setStatus({ type: "success", message: `${workflow.name} canceled.` });
+    } catch (error) {
+      setStatus({ type: "error", message: `Work Flow canceled, but the machine did not confirm idle: ${errorMessage(error)}` });
+    }
+    await data.refresh().catch(() => undefined);
+  };
+
   const setProfileShown = async (profileId: string, shown: boolean) => {
     const shownProfileIds = shown
       ? Array.from(new Set([...data.settings.shownProfileIds, profileId]))
@@ -1705,7 +1903,10 @@ export function App() {
       await data.persistSettings({
         ...data.settings,
         presetSlots: data.settings.presetSlots.map((item, index) => {
-          if (index === editingSlotIndex) return { ...item, profileId: profile.id };
+          if (index === editingSlotIndex) {
+            const { drinkWorkflowId: _drinkWorkflowId, ...rest } = item;
+            return { ...rest, profileId: profile.id };
+          }
           if (item.profileId !== profile.id) return item;
           const { profileId: _profileId, ...rest } = item;
           return rest;
@@ -1718,7 +1919,34 @@ export function App() {
     }
   };
 
+  const assignPresetDrinkWorkflow = async (drinkWorkflow: DrinkWorkflow) => {
+    if (editingSlotIndex === null) return;
+    const slot = data.settings.presetSlots[editingSlotIndex];
+    if (!slot) return;
+
+    try {
+      await data.persistSettings({
+        ...data.settings,
+        presetSlots: data.settings.presetSlots.map((item, index) => {
+          if (index === editingSlotIndex) {
+            const { profileId: _profileId, ...rest } = item;
+            return { ...rest, drinkWorkflowId: drinkWorkflow.id };
+          }
+          if (item.drinkWorkflowId !== drinkWorkflow.id) return item;
+          const { drinkWorkflowId: _drinkWorkflowId, ...rest } = item;
+          return rest;
+        })
+      });
+      setSelectedPresetWorkflowId(drinkWorkflow.id);
+      setStatus({ type: "success", message: `Preset ${slot.label} set to ${drinkWorkflow.name}.` });
+      setEditingSlotIndex(null);
+    } catch (error) {
+      setStatus({ type: "error", message: `Could not save preset: ${errorMessage(error)}` });
+    }
+  };
+
   const applyProfileForBrew = async (profile: ProfileRecord) => {
+    setSelectedPresetWorkflowId(undefined);
     manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId: profile.id };
     setStartupProfileHoldId(null);
     startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
@@ -1902,9 +2130,15 @@ export function App() {
 
   const saveReview = async (shotId: string, annotations: ShotAnnotations) => {
     try {
-      await api.updateShot(shotId, { annotations });
+      const currentShot =
+        (completedReviewShot?.id === shotId ? completedReviewShot : undefined) ??
+        (reviewShot?.id === shotId ? reviewShot : undefined) ??
+        data.shots.find((shot) => shot.id === shotId);
+      const workflow = currentShot && drinkWorkflowDetailsFromShot(currentShot) ? currentShot.workflow : undefined;
+      const updatedShot = await api.updateShot(shotId, { annotations, ...(workflow ? { workflow } : {}) });
+      if (completedReviewShot?.id === shotId) setCompletedReviewShot((current) => mergeReviewShot(current, updatedShot));
       await data.refresh();
-      setStatus({ type: "success", message: "Review saved." });
+      setStatus({ type: "success", message: workflow ? "Work Flow review saved." : "Review saved." });
     } catch (error) {
       setStatus({ type: "error", message: `Could not save review: ${errorMessage(error)}` });
     }
@@ -2283,7 +2517,7 @@ export function App() {
           className="sleep-button"
           aria-label="Sleep machine"
           title={machineConnected ? "Sleep machine" : "Machine is not connected"}
-          disabled={!machineConnected || sleepPending}
+          disabled={!machineConnected || sleepPending || drinkWorkflowBusyRef.current}
           onClick={() => void sleepMachine()}
         >
           <Moon size={17} />
@@ -2363,11 +2597,22 @@ export function App() {
             bags={data.bags}
             shots={data.shots}
             settings={data.settings}
+            drinkWorkflows={data.settings.drinkWorkflows}
+            selectedDrinkWorkflowId={selectedPresetWorkflowId}
+            drinkWorkflowBusy={drinkWorkflowBusy}
             onApplyProfile={(profile) => {
               void applyProfileForBrew(profile);
             }}
+            onSelectDrinkWorkflow={(workflow) => {
+              setSelectedPresetWorkflowId(workflow.id);
+              setStatus({ type: "success", message: `${workflow.name} selected.` });
+            }}
+            onActivateDrinkWorkflow={(workflow) => {
+              void startDrinkWorkflow(workflow);
+            }}
             onEditSlot={(index) => {
               setStatus(null);
+              setPresetEditorMode(data.settings.presetSlots[index]?.drinkWorkflowId ? "workflow" : "profile");
               setEditingSlotIndex(index);
             }}
             grinders={data.grinders ?? []}
@@ -2395,6 +2640,17 @@ export function App() {
             }}
           />
         )}
+        {page === "workflows" && (
+          <WorkflowsPage
+            workflows={data.settings.drinkWorkflows}
+            profiles={data.profiles}
+            run={drinkWorkflowRun}
+            onSave={saveDrinkWorkflow}
+            onDelete={deleteDrinkWorkflow}
+            onStart={startDrinkWorkflow}
+            onCancel={cancelDrinkWorkflow}
+          />
+        )}
         {showLivePage && (
           <LivePage
             workflow={data.workflow}
@@ -2402,6 +2658,9 @@ export function App() {
             latestShot={reviewShot ?? latestShot}
             liveMeasurements={liveTelemetry.measurements}
             scaleSnapshot={liveTelemetry.scaleSnapshot}
+            drinkWorkflowRun={workflowLiveVisible ? drinkWorkflowRun : undefined}
+            drinkWorkflowProfiles={data.profiles}
+            onCancelDrinkWorkflow={cancelDrinkWorkflow}
           />
         )}
         {page === "review" &&
@@ -2541,26 +2800,70 @@ export function App() {
                   {status.message}
                 </p>
               )}
-              <div className="profile-picker" aria-label={`Choose a profile for ${editingSlot.label}`}>
-                {shownProfiles.length === 0 && <p className="muted">No profiles are shown. Enable profiles from the Profiles page.</p>}
-                {shownProfiles.length > 0 && presetPickerProfiles.length === 0 && (
-                  <p className="muted">All shown profiles are already assigned to other presets.</p>
-                )}
-                {presetPickerProfiles.map((profile) => (
-                  <button
-                    key={profile.id}
-                    type="button"
-                    className="list-row"
-                    aria-label={`Use ${profile.profile.title ?? profile.id}`}
-                    onClick={() => {
-                      void assignPresetProfile(profile);
-                    }}
-                  >
-                    <strong>{profile.profile.title ?? profile.id}</strong>
-                    <span>{profile.id === editingSlot.profileId ? "Current profile" : "Use this profile"}</span>
-                  </button>
-                ))}
+              <div className="preset-source-tabs" role="tablist" aria-label="Preset type">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={presetEditorMode === "profile"}
+                  className={presetEditorMode === "profile" ? "active" : ""}
+                  onClick={() => setPresetEditorMode("profile")}
+                >
+                  Profile
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={presetEditorMode === "workflow"}
+                  className={presetEditorMode === "workflow" ? "active" : ""}
+                  onClick={() => setPresetEditorMode("workflow")}
+                >
+                  Work Flow
+                </button>
               </div>
+              {presetEditorMode === "profile" && (
+                <div className="profile-picker" aria-label={`Choose a profile for ${editingSlot.label}`}>
+                  {shownProfiles.length === 0 && <p className="muted">No profiles are shown. Enable profiles from the Profiles page.</p>}
+                  {shownProfiles.length > 0 && presetPickerProfiles.length === 0 && (
+                    <p className="muted">All shown profiles are already assigned to other presets.</p>
+                  )}
+                  {presetPickerProfiles.map((profile) => (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      className="list-row"
+                      aria-label={`Use ${profile.profile.title ?? profile.id}`}
+                      onClick={() => {
+                        void assignPresetProfile(profile);
+                      }}
+                    >
+                      <strong>{profile.profile.title ?? profile.id}</strong>
+                      <span>{profile.id === editingSlot.profileId ? "Current profile" : "Use this profile"}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {presetEditorMode === "workflow" && (
+                <div className="profile-picker" aria-label={`Choose a Work Flow for ${editingSlot.label}`}>
+                  {data.settings.drinkWorkflows.length === 0 && <p className="muted">No saved Work Flows.</p>}
+                  {data.settings.drinkWorkflows.length > 0 && presetPickerDrinkWorkflows.length === 0 && (
+                    <p className="muted">All saved Work Flows are already assigned to other presets.</p>
+                  )}
+                  {presetPickerDrinkWorkflows.map((workflow) => (
+                    <button
+                      key={workflow.id}
+                      type="button"
+                      className="list-row"
+                      aria-label={`Use Work Flow ${workflow.name}`}
+                      onClick={() => {
+                        void assignPresetDrinkWorkflow(workflow);
+                      }}
+                    >
+                      <strong>{workflow.name}</strong>
+                      <span>{workflow.id === editingSlot.drinkWorkflowId ? "Current Work Flow" : workflow.steps.map((step) => drinkWorkflowStepLabel(step)).join(" / ")}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

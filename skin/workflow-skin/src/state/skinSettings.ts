@@ -1,6 +1,9 @@
+import { normalizeDrinkWorkflows, type DrinkWorkflow } from "../lib/drinkWorkflows";
+
 export interface PresetSlot {
   label: string;
   profileId?: string;
+  drinkWorkflowId?: string;
 }
 
 export type SteamTimers = Record<string, number>;
@@ -26,11 +29,12 @@ export interface SkinThemePalette {
   accentAlt: string;
 }
 
-export const DEFAULT_MAIN_MENU_ITEMS = ["brew", "live", "review", "steam", "bags", "profiles", "grinders", "history", "community", "settings"] as const;
+export const DEFAULT_MAIN_MENU_ITEMS = ["brew", "workflows", "live", "review", "steam", "bags", "profiles", "grinders", "history", "community", "settings"] as const;
 export type MainMenuItemId = (typeof DEFAULT_MAIN_MENU_ITEMS)[number];
 
 export const MAIN_MENU_ITEM_LABELS: Record<MainMenuItemId, string> = {
   brew: "Brew",
+  workflows: "Work Flows",
   live: "Live",
   review: "Review",
   steam: "Steam",
@@ -55,6 +59,7 @@ export interface SkinSettings {
   r2SensorId?: string;
   shownProfileIds: string[];
   profileWorkflows: Record<string, ProfileWorkflowSettings>;
+  drinkWorkflows: DrinkWorkflow[];
   lastBeanBatchId?: string;
   lastGrinderId?: string;
   defaultGrinderId?: string;
@@ -173,7 +178,8 @@ export function createDefaultSkinSettings(): SkinSettings {
     },
     topStatusIndicatorIds: [...DEFAULT_TOP_STATUS_INDICATORS],
     shownProfileIds: [],
-    profileWorkflows: {}
+    profileWorkflows: {},
+    drinkWorkflows: []
   };
 }
 
@@ -197,7 +203,14 @@ function normalizePresetSlots(value: unknown): PresetSlot[] {
   for (const slot of value) {
     if (!isPlainRecord(slot) || typeof slot.label !== "string") return clonePresetSlots(DEFAULT_PRESET_SLOTS);
     if (slot.profileId !== undefined && typeof slot.profileId !== "string") return clonePresetSlots(DEFAULT_PRESET_SLOTS);
-    slots.push(typeof slot.profileId === "string" ? { label: slot.label, profileId: slot.profileId } : { label: slot.label });
+    if (slot.drinkWorkflowId !== undefined && typeof slot.drinkWorkflowId !== "string") return clonePresetSlots(DEFAULT_PRESET_SLOTS);
+    if (typeof slot.drinkWorkflowId === "string" && slot.drinkWorkflowId.trim()) {
+      slots.push({ label: slot.label, drinkWorkflowId: slot.drinkWorkflowId.trim() });
+    } else if (typeof slot.profileId === "string" && slot.profileId.trim()) {
+      slots.push({ label: slot.label, profileId: slot.profileId.trim() });
+    } else {
+      slots.push({ label: slot.label });
+    }
   }
 
   return slots;
@@ -399,7 +412,8 @@ export function normalizeSkinSettings(value: unknown): SkinSettings {
     customSkinThemes: normalizeCustomSkinThemes(value.customSkinThemes),
     topStatusIndicatorIds: topStatusIndicatorIdsForSettings({ topStatusIndicatorIds: value.topStatusIndicatorIds }),
     shownProfileIds: normalizeStringList(value.shownProfileIds),
-    profileWorkflows: normalizeProfileWorkflows(value.profileWorkflows)
+    profileWorkflows: normalizeProfileWorkflows(value.profileWorkflows),
+    drinkWorkflows: normalizeDrinkWorkflows(value.drinkWorkflows)
   };
 
   if (typeof value.startupProfileId === "string") settings.startupProfileId = value.startupProfileId;

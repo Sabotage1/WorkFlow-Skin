@@ -19,6 +19,31 @@ test("skin shell renders without overflow", async ({ page }) => {
   expect(horizontalOverflow).toBeLessThanOrEqual(1);
 });
 
+test("Work Flows builder supports three touch-safe ordered actions without horizontal overflow", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Work Flows", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Work Flows", exact: true })).toBeVisible();
+  const addStep = page.getByRole("button", { name: "Add Step", exact: true });
+  await addStep.click();
+  await page.getByRole("combobox", { name: "Next action", exact: true }).selectOption("steam");
+  await expect(page.getByRole("combobox", { name: "Next action", exact: true })).toHaveValue("steam");
+  await addStep.click();
+
+  await expect(page.getByRole("group", { name: "Step 3" })).toBeVisible();
+  await expect(addStep).toBeDisabled();
+
+  const metrics = await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".drink-workflows-page button"));
+    return {
+      horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      minimumButtonHeight: Math.min(...buttons.map((button) => button.getBoundingClientRect().height))
+    };
+  });
+  expect(metrics.horizontalOverflow).toBeLessThanOrEqual(1);
+  expect(metrics.minimumButtonHeight).toBeGreaterThanOrEqual(44);
+});
+
 test("community fullscreen graph ignores page scroll on low-resolution screens", async ({ page }) => {
   await page.setViewportSize({ width: 480, height: 240 });
   await page.goto("/");

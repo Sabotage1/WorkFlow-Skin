@@ -2,6 +2,7 @@ import { Share2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ShotRecord } from "../api/types";
 import type { Bag } from "../lib/bags";
+import { drinkWorkflowDetailsFromShot, drinkWorkflowStepLabel, drinkWorkflowStepSummary } from "../lib/drinkWorkflows";
 import { isGoldenShot, shotTasteRating, tasteScoreLabel, tasteTone } from "../lib/shotTaste";
 import { grindSizeFromShot } from "../lib/shotStats";
 
@@ -50,6 +51,7 @@ function shotBag(shot: ShotRecord, bagById: Map<string, Bag>): Bag | undefined {
 }
 
 function historySearchText(shot: ShotRecord, bag: Bag | undefined): string {
+  const drinkWorkflow = drinkWorkflowDetailsFromShot(shot);
   return [
     shot.id,
     shot.timestamp,
@@ -60,6 +62,8 @@ function historySearchText(shot: ShotRecord, bag: Bag | undefined): string {
     shot.annotations?.espressoNotes,
     shot.shotNotes,
     grindSizeFromShot(shot),
+    drinkWorkflow?.name,
+    ...(drinkWorkflow?.steps.flatMap((step) => [drinkWorkflowStepLabel(step), drinkWorkflowStepSummary(step)]) ?? []),
     bag?.name,
     bag?.roaster,
     bag?.bean,
@@ -174,6 +178,7 @@ export function HistoryPage({
         const golden = isGoldenShot(shot);
         const rowClassName = ["list-row", "history-shot-row", "history-shot-row-compact", `taste-${tone}`, golden ? "golden" : ""].filter(Boolean).join(" ");
         const title = profileTitle(shot);
+        const drinkWorkflow = drinkWorkflowDetailsFromShot(shot);
         return (
           <div className="history-shot-entry" key={shot.id}>
             <button type="button" className={rowClassName} aria-label={`Open shot review for ${title}`} onClick={() => onOpenShot?.(shot)}>
@@ -181,7 +186,12 @@ export function HistoryPage({
                 <strong>{new Date(shot.timestamp).toLocaleString()}</strong>
                 <span className={`history-rating ${tone}`}>{tasteScoreLabel(rating)}</span>
               </div>
-              <span>{title}</span>
+              <span>{drinkWorkflow ? `${drinkWorkflow.name} · ${title}` : title}</span>
+              {drinkWorkflow && (
+                <span className="history-workflow-summary">
+                  {drinkWorkflow.steps.map((step) => `${drinkWorkflowStepLabel(step)}: ${drinkWorkflowStepSummary(step)}`).join(" / ")}
+                </span>
+              )}
               <span>{bag ? `${bag.roaster} ${bag.bean}` : "No bag"}</span>
               <span>
                 EY {shot.annotations?.drinkEy ?? "—"} · Grind {grindSizeFromShot(shot) ?? "—"}

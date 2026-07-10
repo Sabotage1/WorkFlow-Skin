@@ -32,12 +32,28 @@ export interface WorkflowContext {
   extras?: JsonMap;
 }
 
+export interface SteamSettings {
+  targetTemperature: number;
+  duration: number;
+  flow: number;
+  stopAtTemperature?: number;
+}
+
+export interface HotWaterData {
+  targetTemperature: number;
+  duration: number;
+  volume: number;
+  flow: number;
+}
+
 export interface Workflow {
   id?: string;
   name?: string;
   description?: string;
   profile?: Profile;
   context?: WorkflowContext;
+  steamSettings?: SteamSettings;
+  hotWaterData?: HotWaterData;
 }
 
 export interface Bean {
@@ -151,6 +167,7 @@ export interface ShotRecord {
   annotations?: ShotAnnotations;
   shotNotes?: string;
   metadata?: JsonMap;
+  stopReason?: string;
 }
 
 export interface ShotPage {

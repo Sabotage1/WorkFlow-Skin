@@ -1,7 +1,9 @@
 import type { JsonMap, ProfileRecord, ShotRecord, ShotSnapshot, WeightSnapshot, Workflow } from "../api/types";
+import { DrinkWorkflowRunCard } from "../components/DrinkWorkflowRunCard";
 import { MetricTile } from "../components/MetricTile";
 import { machineStateLabel } from "../lib/machineState";
 import { ShotGraph } from "../components/ShotGraph";
+import type { DrinkWorkflowRunState } from "../lib/drinkWorkflows";
 import { trimLiveGraphWarmup } from "../lib/liveMeasurements";
 import { shotStats } from "../lib/shotStats";
 import { useEffect, useRef } from "react";
@@ -117,13 +119,19 @@ export function LivePage({
   activeProfile,
   latestShot,
   liveMeasurements,
-  scaleSnapshot
+  scaleSnapshot,
+  drinkWorkflowRun,
+  drinkWorkflowProfiles = [],
+  onCancelDrinkWorkflow = () => undefined
 }: {
   workflow: Workflow;
   activeProfile?: ProfileRecord;
   latestShot: ShotRecord | null;
   liveMeasurements: ShotSnapshot[];
   scaleSnapshot: WeightSnapshot | null;
+  drinkWorkflowRun?: DrinkWorkflowRunState;
+  drinkWorkflowProfiles?: ProfileRecord[];
+  onCancelDrinkWorkflow?: () => Promise<void> | void;
 }) {
   const rawMeasurements = liveMeasurements.length ? liveMeasurements : latestShot?.measurements ?? [];
   const measurements = trimLiveGraphWarmup(rawMeasurements);
@@ -136,6 +144,7 @@ export function LivePage({
   const waitingForData = measurements.length === 0 && !scaleSnapshot;
   const steps = profileSteps(activeProfile, workflow);
   const stepInfo = currentStepInfo(steps, time);
+  const showDrinkWorkflowRun = Boolean(drinkWorkflowRun?.workflow && drinkWorkflowRun.phase !== "idle");
   const stepPanelRef = useRef<HTMLElement | null>(null);
   const focusedStepPanelRef = useRef(false);
 
@@ -149,6 +158,14 @@ export function LivePage({
 
   return (
     <div className="live-grid">
+      {showDrinkWorkflowRun && drinkWorkflowRun && (
+        <DrinkWorkflowRunCard run={drinkWorkflowRun} profiles={drinkWorkflowProfiles} onCancel={onCancelDrinkWorkflow} />
+      )}
+      {showDrinkWorkflowRun && (
+        <section className="panel wide dark-graph-panel workflow-live-graph">
+          <ShotGraph measurements={measurements} />
+        </section>
+      )}
       <section className="panel wide live-hero">
         <div>
           <span className="eyebrow">{profileName(activeProfile, workflow)}</span>
@@ -181,9 +198,11 @@ export function LivePage({
           </span>
         </section>
       )}
-      <section className="panel wide dark-graph-panel">
-        <ShotGraph measurements={measurements} />
-      </section>
+      {!showDrinkWorkflowRun && (
+        <section className="panel wide dark-graph-panel">
+          <ShotGraph measurements={measurements} />
+        </section>
+      )}
       <section className="panel">
         <h2>Live Details</h2>
         <MetricTile label="Pressure" value={formatLiveNumber(pressure)} unit="bar" />

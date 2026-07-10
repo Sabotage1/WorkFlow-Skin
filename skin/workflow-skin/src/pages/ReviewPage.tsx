@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Share2 } from "lucide-react";
+import { Share2, Workflow as WorkflowIcon } from "lucide-react";
 import type { Grinder, SensorListItem, ShotAnnotations, ShotRecord } from "../api/types";
 import { ShotGraph } from "../components/ShotGraph";
 import type { Bag } from "../lib/bags";
+import { drinkWorkflowDetailsFromShot, drinkWorkflowStepLabel, drinkWorkflowStepSummary } from "../lib/drinkWorkflows";
 import { calculateEy, cleanNumber } from "../lib/ey";
 import { tasteScoreLabel, tasteTone, tasteToneStyles } from "../lib/shotTaste";
 import { grindSizeFromShot, previousFiveForBag, shotContext, shotStats } from "../lib/shotStats";
@@ -161,6 +162,8 @@ export function ReviewPage({
   const reviewShots = [shot, ...sameBagShots].map((item) => loadedShotsById[item.id] ?? item);
   const selectedShotIndex = Math.max(0, reviewShots.findIndex((item) => item.id === selectedShotId));
   const selectedShot = reviewShots[selectedShotIndex] ?? shot;
+  const selectedDrinkWorkflow = drinkWorkflowDetailsFromShot(selectedShot);
+  const reviewedDrinkWorkflow = drinkWorkflowDetailsFromShot(shot);
   const selectedShotIsLatest = selectedShot.id === shot.id;
   const selectedStats = shotStats(selectedShot);
   const selectedContext = selectedShotIsLatest ? context : shotContext(selectedShot);
@@ -425,6 +428,26 @@ export function ReviewPage({
           <ShotGraph measurements={selectedShot.measurements ?? []} />
         )}
       </section>
+      {selectedDrinkWorkflow && (
+        <section className="panel wide review-workflow-details">
+          <div className="review-workflow-heading">
+            <WorkflowIcon size={22} />
+            <span>
+              <span className="eyebrow">Work Flow</span>
+              <h2>{selectedDrinkWorkflow.name}</h2>
+            </span>
+          </div>
+          <ol className="review-workflow-steps">
+            {selectedDrinkWorkflow.steps.map((step, index) => (
+              <li key={step.id}>
+                <span>{index + 1}</span>
+                <strong>{drinkWorkflowStepLabel(step)}</strong>
+                <small>{drinkWorkflowStepSummary(step)}</small>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
       <section className="panel">
         <h2>{selectedShotIsLatest ? "Last Shot Details" : "Selected Shot Details"}</h2>
         {selectedShotIsLatest && bags.length > 0 && (
@@ -521,9 +544,9 @@ export function ReviewPage({
         <p>Previous grind sizes: {sameBagShots.map(grindSizeFromShot).filter(Boolean).join(", ") || "—"}</p>
       </section>
       <section className="panel review-form taste-card">
-        <h2>Taste</h2>
+        <h2>{reviewedDrinkWorkflow ? "Work Flow Rating" : "Taste"}</h2>
         <label className="taste-slider-field">
-          <span>Taste rating</span>
+          <span>{reviewedDrinkWorkflow ? `${reviewedDrinkWorkflow.name} result` : "Taste rating"}</span>
           <div className={`taste-slider-shell ${selectedTasteTone}`} style={tasteStyle}>
             <input
               aria-label="Taste rating"
@@ -555,7 +578,7 @@ export function ReviewPage({
             </button>
           )}
           <button type="button" className="primary-button" onClick={save}>
-            Save Review
+            {reviewedDrinkWorkflow ? "Save Work Flow Review" : "Save Review"}
           </button>
         </div>
       </section>

@@ -20,6 +20,7 @@ describe("skin settings", () => {
     expect(defaultSkinSettings.reviewEnabledByProfile).toEqual({});
     expect(defaultSkinSettings.defaultReviewEnabled).toBe(true);
     expect(defaultSkinSettings.profileWorkflows).toEqual({});
+    expect(defaultSkinSettings.drinkWorkflows).toEqual([]);
     expect(defaultSkinSettings.skinTitle).toBe("WorkFlow");
     expect(defaultSkinSettings.startupProfileId).toBeUndefined();
     expect(defaultSkinSettings.r2SensorId).toBeUndefined();

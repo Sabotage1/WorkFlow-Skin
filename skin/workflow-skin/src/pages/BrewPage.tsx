@@ -1,8 +1,10 @@
+import { Play, Workflow as WorkflowIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Grinder, ProfileRecord, ShotRecord, Workflow } from "../api/types";
 import { MetricTile } from "../components/MetricTile";
 import { ProfilePresetGrid } from "../components/ProfilePresetGrid";
 import type { Bag } from "../lib/bags";
+import { drinkWorkflowStepLabel, drinkWorkflowStepSummary, type DrinkWorkflow } from "../lib/drinkWorkflows";
 import { recommendProfiles } from "../lib/recommendations";
 import { grindSizeFromShot, previousFiveForBag, shotContext, shotStats } from "../lib/shotStats";
 import { selectedProfileIdFromWorkflow } from "../lib/workflowRouting";
@@ -85,7 +87,12 @@ export function BrewPage({
   bags,
   shots,
   settings,
+  drinkWorkflows = [],
+  selectedDrinkWorkflowId,
+  drinkWorkflowBusy = false,
   onApplyProfile,
+  onSelectDrinkWorkflow = () => undefined,
+  onActivateDrinkWorkflow = () => undefined,
   onEditSlot,
   grinders = [],
   onUpdateRecipe,
@@ -97,7 +104,12 @@ export function BrewPage({
   grinders?: Grinder[];
   shots: ShotRecord[];
   settings: SkinSettings;
+  drinkWorkflows?: DrinkWorkflow[];
+  selectedDrinkWorkflowId?: string;
+  drinkWorkflowBusy?: boolean;
   onApplyProfile: (profile: ProfileRecord) => void;
+  onSelectDrinkWorkflow?: (workflow: DrinkWorkflow) => void;
+  onActivateDrinkWorkflow?: (workflow: DrinkWorkflow) => void;
   onEditSlot: (index: number) => void;
   onUpdateRecipe?: (recipe: { dose?: number; yield?: number }) => void;
   onSelectBag?: (bagId: string) => void;
@@ -106,6 +118,7 @@ export function BrewPage({
   const selectedProfileId = selectedProfileIdFromWorkflow(workflow, profiles);
   const shownProfiles = profiles.filter((profile) => isProfileShown(settings, profile.id));
   const slots = visiblePresetSlots(settings);
+  const selectedDrinkWorkflow = drinkWorkflows.find((workflow) => workflow.id === selectedDrinkWorkflowId);
   const guidance = useMemo(() => bagGuidance(shots, selectedBag?.id), [shots, selectedBag?.id]);
   const [doseText, setDoseText] = useState(() => initialRecipe(workflow).dose);
   const [yieldText, setYieldText] = useState(() => initialRecipe(workflow).yield);
@@ -153,10 +166,37 @@ export function BrewPage({
         <ProfilePresetGrid
           slots={slots}
           profiles={profiles}
+          drinkWorkflows={drinkWorkflows}
           selectedProfileId={selectedProfileId}
+          selectedDrinkWorkflowId={selectedDrinkWorkflowId}
           onApply={onApplyProfile}
+          onSelectDrinkWorkflow={onSelectDrinkWorkflow}
           onEditSlot={onEditSlot}
         />
+        {selectedDrinkWorkflow && (
+          <div className="workflow-preset-activation">
+            <div className="workflow-preset-activation-copy">
+              <WorkflowIcon size={20} />
+              <span>
+                <strong>{selectedDrinkWorkflow.name}</strong>
+                <small>
+                  {selectedDrinkWorkflow.steps
+                    .map((step) => `${drinkWorkflowStepLabel(step)}: ${drinkWorkflowStepSummary(step)}`)
+                    .join(" / ")}
+                </small>
+              </span>
+            </div>
+            <button
+              type="button"
+              className="activate-workflow-button"
+              disabled={drinkWorkflowBusy}
+              onClick={() => onActivateDrinkWorkflow(selectedDrinkWorkflow)}
+            >
+              <Play size={18} />
+              Activate Work Flow
+            </button>
+          </div>
+        )}
       </section>
       <section className="panel">
         <h2>Current Bag</h2>
