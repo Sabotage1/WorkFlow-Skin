@@ -121,6 +121,8 @@ const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 5000;
 const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1000];
 const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750, 1500];
+const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 2;
+const DEVICE_DISCOVERY_RETRY_DELAY_MS = 350;
 const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
@@ -382,6 +384,56 @@ function waitForNativeUpdate(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+async function discoverAvailableDevices(
+  api: ReaPrimeApi,
+  options: {
+    fallbackDevices: DeviceInfo[];
+    predicate: (device: DeviceInfo) => boolean;
+    attempts?: number;
+    onRetry?: (attempt: number) => void;
+  }
+): Promise<{ devices: DeviceInfo[]; firstError: unknown | null }> {
+  const attempts = Math.max(1, Math.floor(options.attempts ?? 1));
+  let devices = options.fallbackDevices;
+  let firstError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      options.onRetry?.(attempt + 1);
+      await waitForNativeUpdate(DEVICE_DISCOVERY_RETRY_DELAY_MS);
+    }
+
+    let scanError: unknown = null;
+    let listError: unknown = null;
+    let scannedDevices: DeviceInfo[] = [];
+    let listedDevices: DeviceInfo[] = [];
+    try {
+      // Discovery-only scans are not discarded by ConnectionManager when its
+      // wake recovery is already connecting another device.
+      scannedDevices = await api.scanDevices({ connect: false, quick: false });
+    } catch (error) {
+      scanError = error;
+      firstError ??= error;
+    }
+    try {
+      listedDevices = await api.listDevices();
+    } catch (error) {
+      listError = error;
+      firstError ??= error;
+    }
+
+    const latestDevices = [
+      ...(listError ? [] : listedDevices),
+      ...(scanError ? [] : scannedDevices),
+      ...(scanError && listError ? devices : [])
+    ];
+    devices = uniqueDevices(latestDevices).filter(isAvailableDevice);
+    if (devices.some(options.predicate)) break;
+  }
+
+  return { devices, firstError };
 }
 
 async function findR2SensorWithRetry(api: ReaPrimeApi, fallbackSensors: SensorListItem[]): Promise<SensorListItem | null> {
@@ -1799,9 +1851,13 @@ export function App() {
     setStatus({ type: "success", message: "Looking for DiFluid R2." });
     try {
       await wakeMachineIfNeeded(api, data.machineState);
-      const scannedDevices = await api.scanDevices({ connect: false, quick: false });
-      const listedDevices = await api.listDevices().catch(() => [] as DeviceInfo[]);
-      const r2Devices = uniqueDevices([...listedDevices, ...scannedDevices])
+      const discovery = await discoverAvailableDevices(api, {
+        fallbackDevices: data.devices ?? [],
+        predicate: (device) => isR2Device(device) || isConfiguredR2Device(device, data.settings.r2SensorId),
+        attempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
+        onRetry: () => setStatus({ type: "success", message: "Still scanning for DiFluid R2." })
+      });
+      const r2Devices = discovery.devices
         .filter(
           (device) =>
             isAvailableDevice(device) &&
@@ -1815,6 +1871,7 @@ export function App() {
 
       if (r2Devices.length === 0) {
         await data.refresh();
+        if (discovery.firstError) throw discovery.firstError;
         skinLog("r2_manual_scan_not_found", { configuredDeviceId: data.settings.r2SensorId });
         setStatus({ type: "error", message: "No available DiFluid R2 was found. Keep it awake and tap R2 again." });
         return;
@@ -1954,36 +2011,30 @@ export function App() {
     setLastUseAt(Date.now());
   };
 
-  const requestScaleConnection = useCallback(async () => {
+  const requestScaleConnection = useCallback(async (
+    options: { discoveryAttempts?: number; onDiscoveryRetry?: (attempt: number) => void } = {}
+  ) => {
     await wakeMachineIfNeeded(api, data.machineState);
     const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
     if (hasConnectedScale(initialDevices)) {
       await data.refresh();
-      return { connected: true, requested: false, found: true, scanSawScale: true, firstError: null };
+      return { connected: true, requested: false, found: true, firstError: null };
     }
 
     let requested = false;
-    let firstError: unknown = null;
-    let scannedDevices: DeviceInfo[] = [];
-    try {
-      // A blocking scan is important here. A quick scan starts in the
-      // background, and current ReaPrime intentionally drops a second full
-      // connect request while that first scan is still running.
-      scannedDevices = await api.scanDevices({ connect: true, quick: false });
-    } catch (error) {
-      firstError = error;
-    }
-
-    const listedDevices = await api.listDevices().catch(() => [] as DeviceInfo[]);
-    let refreshedDevices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
+    const discovery = await discoverAvailableDevices(api, {
+      fallbackDevices: initialDevices,
+      predicate: (device) => isScaleDeviceCandidate(device) && !isR2Device(device),
+      attempts: options.discoveryAttempts,
+      onRetry: options.onDiscoveryRetry
+    });
+    let firstError = discovery.firstError;
+    let refreshedDevices = discovery.devices;
     const scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-    const scanSawScale = scannedDevices.some(
-      (device) => isAvailableDevice(device) && isScaleDeviceCandidate(device) && !isR2Device(device)
-    );
 
     if (hasConnectedScale(refreshedDevices)) {
       await data.refresh();
-      return { connected: true, requested, found: true, scanSawScale, firstError };
+      return { connected: true, requested, found: true, firstError };
     }
 
     for (const device of scaleDevices.filter((item) => !isConnectedDevice(item))) {
@@ -2003,7 +2054,7 @@ export function App() {
 
         await data.refresh();
         skinLog("scale_manual_connect_confirmed", { deviceId: device.id });
-        return { connected: true, requested, found: true, scanSawScale, firstError };
+        return { connected: true, requested, found: true, firstError };
       }
     }
 
@@ -2012,7 +2063,6 @@ export function App() {
       connected: hasConnectedScale(refreshedDevices),
       requested,
       found: scaleDevices.length > 0,
-      scanSawScale,
       firstError
     };
   }, [api, data.devices, data.machineState, data.refresh]);
@@ -2391,7 +2441,10 @@ export function App() {
   const forceScaleConnection = async () => {
     setStatus({ type: "success", message: "Scanning for scale." });
     try {
-      const result = await requestScaleConnection();
+      const result = await requestScaleConnection({
+        discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
+        onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." })
+      });
       if (result.connected) {
         setStatus({ type: "success", message: "Scale connected." });
         return;
@@ -2425,7 +2478,10 @@ export function App() {
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
       try {
-        const result = await requestScaleConnection();
+        const result = await requestScaleConnection({
+          discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
+          onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." })
+        });
         if (result.connected) {
           setStatus({ type: "success", message: "Scale connected. Tap Scale again to tare." });
           return;
