@@ -63,6 +63,7 @@ import {
 } from "./lib/drinkWorkflows";
 import { machineModeLabel, machineTemperature } from "./lib/machineState";
 import { isBrewingMode, isIdleMode, isSleepingMode, isSteamingMode, shouldPollMachineState, workflowActivityForMode } from "./lib/machineMode";
+import { isActiveShotLifecycle, isFinishedShotLifecycle } from "./lib/shotLifecycle";
 import { grindSizeFromShot, shotStats } from "./lib/shotStats";
 import { selectedProfileIdFromWorkflow, type CompletedWorkflowActivity } from "./lib/workflowRouting";
 import { BagsPage } from "./pages/BagsPage";
@@ -112,13 +113,14 @@ type CompletedActivityCapture = {
   activity: CompletedWorkflowActivity;
   profileId?: string;
   startLatestShotId?: string | null;
+  shotId?: string;
 };
 
 const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
 const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
-const WATER_REFILL_POPUP_DELAY_MS = 5000;
+const WATER_REFILL_POPUP_DELAY_MS = 10_000;
 const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1000];
 const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750, 1500];
 const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 2;
@@ -126,6 +128,7 @@ const DEVICE_DISCOVERY_RETRY_DELAY_MS = 350;
 const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
 const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
+const MANAGED_SCALE_RECOVERY_MIN_VERSION = [0, 7, 13] as const;
 
 interface TopStatusIndicator {
   id: TopStatusIndicatorId;
@@ -150,6 +153,17 @@ const navById: Record<MainMenuItemId, { label: string; icon: React.ComponentType
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function appVersionAtLeast(version: string | null | undefined, minimum: readonly [number, number, number]): boolean {
+  const match = version?.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const current = [Number(match[1]), Number(match[2]), Number(match[3])];
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (current[index] > minimum[index]) return true;
+    if (current[index] < minimum[index]) return false;
+  }
+  return true;
 }
 
 function sleepFailureStatusMessage(error: unknown): string {
@@ -498,6 +512,21 @@ function shotWithFallbackMeasurements(shot: ShotRecord, fallbackMeasurements: Sh
   return { ...shot, measurements: trimmedFallbackMeasurements };
 }
 
+async function loadCompletedShot(
+  api: ReaPrimeApi,
+  completed: CompletedActivityCapture,
+  fallbackLatestShot: ShotRecord | null
+): Promise<ShotRecord | null> {
+  if (completed.shotId) {
+    for (const delay of [0, 150, 450, 900]) {
+      if (delay > 0) await waitForNativeUpdate(delay);
+      const shot = await api.getShot(completed.shotId).catch(() => null);
+      if (shot) return shot;
+    }
+  }
+  return api.getLatestShot().catch(() => fallbackLatestShot);
+}
+
 function mergeReviewShot(cachedShot: ShotRecord | null, refreshedShot: ShotRecord | undefined): ShotRecord | null {
   if (!cachedShot) return refreshedShot ?? null;
   if (!refreshedShot) return cachedShot;
@@ -770,6 +799,7 @@ export function App() {
   const autoSleepPendingRef = useRef(false);
   const completedActivityRef = useRef<CompletedActivityCapture | null>(null);
   const completedActivityRoutingRef = useRef(false);
+  const lastHandledShotLifecycleIdRef = useRef<string | null>(null);
   const completedActivityTimerRef = useRef<number | null>(null);
   const ignoreActiveActivityUntilAtRef = useRef(0);
   const readyLogRef = useRef(false);
@@ -848,7 +878,19 @@ export function App() {
   const waterLow = waterRefillRequired(machineStateForWater, liveTelemetry.waterLevels);
   const waterLowDetail = waterRefillMessage(machineStateForWater, liveTelemetry.waterLevels);
   const machineSleeping = isSleepingMode(currentMachineMode) || isSleepingMachine(data.machineState);
-  const brewingCoffee = isBrewingMode(currentMachineMode);
+  const sequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
+  const finishedShotLifecycle = isFinishedShotLifecycle(liveTelemetry.shotLifecycle)
+    ? liveTelemetry.shotLifecycle
+    : liveTelemetry.latestFinishedShotLifecycle;
+  const sequencedBrewFinished = Boolean(
+    finishedShotLifecycle &&
+    isFinishedShotLifecycle(finishedShotLifecycle) &&
+    (finishedShotLifecycle.shotId
+      ? finishedShotLifecycle.shotId !== lastHandledShotLifecycleIdRef.current
+      : isFinishedShotLifecycle(liveTelemetry.shotLifecycle))
+  );
+  const brewingCoffee = isBrewingMode(currentMachineMode) || sequencedBrewActive;
+  const waterRefillAlertSuppressed = brewingCoffee || drinkWorkflowBusy;
   const holdingCompletedBrewOnLivePage = page === "live" && !brewingCoffee && completedActivityRef.current?.activity === "brew";
   const workflowLiveVisible = Boolean(drinkWorkflowRun.workflow && drinkWorkflowBusy);
   const showLivePage = page === "live" && (brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible);
@@ -1406,7 +1448,7 @@ export function App() {
     const shouldPoll = shouldPollMachineState({
       currentMode: currentMachineMode,
       liveMode: liveTelemetry.machineMode?.state,
-      hasCompletedActivity: Boolean(completedActivityRef.current)
+      hasCompletedActivity: Boolean(completedActivityRef.current) || sequencedBrewActive || sequencedBrewFinished
     });
     if (!shouldPoll) {
       setFastMachineState(null);
@@ -1427,17 +1469,18 @@ export function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [api, currentMachineMode, data.loaded, liveTelemetry.machineMode?.state, page]);
+  }, [api, currentMachineMode, data.loaded, liveTelemetry.machineMode?.state, page, sequencedBrewActive, sequencedBrewFinished]);
 
   const routeCompletedActivity = useCallback(
     async (completed: CompletedActivityCapture) => {
       if (completedActivityRoutingRef.current) return;
       completedActivityRoutingRef.current = true;
+      if (completed.shotId) lastHandledShotLifecycleIdRef.current = completed.shotId;
       try {
         if (completed.activity === "brew") setPage("review");
         await data.refresh();
         if (completed.activity === "brew") {
-          const latestCompletedShot = await api.getLatestShot().catch(() => latestShot);
+          const latestCompletedShot = await loadCompletedShot(api, completed, latestShot);
           if (!latestCompletedShot || (completed.startLatestShotId !== undefined && latestCompletedShot.id === completed.startLatestShotId)) {
             setCompletedReviewShot(null);
             setAutoReadR2ShotId(null);
@@ -1493,7 +1536,23 @@ export function App() {
       return;
     }
 
-    const activeActivity = workflowActivityForMode(currentMachineMode);
+    if (
+      sequencedBrewFinished &&
+      finishedShotLifecycle?.shotId &&
+      !completedActivityRef.current &&
+      Date.now() >= ignoreActiveActivityUntilAtRef.current
+    ) {
+      completedActivityRef.current = {
+        activity: "brew",
+        profileId: selectedProfileId,
+        startLatestShotId: idleLatestShotIdRef.current,
+        shotId: finishedShotLifecycle.shotId
+      };
+    }
+
+    const completedByShotLifecycle = completedActivityRef.current?.activity === "brew" && sequencedBrewFinished;
+    const modeActivity = workflowActivityForMode(currentMachineMode);
+    const activeActivity = sequencedBrewActive ? "brew" : sequencedBrewFinished && modeActivity === "brew" ? null : modeActivity;
     if (activeActivity) {
       if (completedActivityRoutingRef.current) return;
       if (Date.now() < ignoreActiveActivityUntilAtRef.current) return;
@@ -1501,8 +1560,11 @@ export function App() {
         completedActivityRef.current = {
           activity: activeActivity,
           profileId: selectedProfileId,
-          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current : undefined
+          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current : undefined,
+          shotId: activeActivity === "brew" ? liveTelemetry.shotLifecycle?.shotId ?? undefined : undefined
         };
+      } else if (activeActivity === "brew" && !completedActivityRef.current.shotId && liveTelemetry.shotLifecycle?.shotId) {
+        completedActivityRef.current = { ...completedActivityRef.current, shotId: liveTelemetry.shotLifecycle.shotId };
       }
       if (completedActivityTimerRef.current !== null) {
         window.clearTimeout(completedActivityTimerRef.current);
@@ -1511,7 +1573,7 @@ export function App() {
       return;
     }
 
-    if (!isIdleMode(currentMachineMode)) return;
+    if (!isIdleMode(currentMachineMode) && !completedByShotLifecycle) return;
     if (!completedActivityRef.current) return;
 
     const completed = completedActivityRef.current;
@@ -1528,7 +1590,17 @@ export function App() {
       completedActivityRef.current = null;
       void routeCompletedActivity(completed);
     }, POST_ACTIVITY_ROUTE_DELAY_MS);
-  }, [currentMachineMode, data.loaded, latestShot?.id, routeCompletedActivity, selectedProfileId]);
+  }, [
+    currentMachineMode,
+    data.loaded,
+    latestShot?.id,
+    liveTelemetry.shotLifecycle,
+    finishedShotLifecycle,
+    routeCompletedActivity,
+    selectedProfileId,
+    sequencedBrewActive,
+    sequencedBrewFinished
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1591,6 +1663,11 @@ export function App() {
       return;
     }
 
+    if (waterRefillAlertSuppressed) {
+      setWaterRefillVisible(false);
+      return;
+    }
+
     if (waterRefillAcknowledged || waterRefillVisible) return;
 
     const timer = window.setTimeout(() => {
@@ -1600,7 +1677,7 @@ export function App() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [waterLow, waterRefillAcknowledged, waterRefillVisible]);
+  }, [waterLow, waterRefillAcknowledged, waterRefillAlertSuppressed, waterRefillVisible]);
 
   const confirmWaterRefill = () => {
     setWaterRefillAcknowledged(true);
@@ -2022,15 +2099,38 @@ export function App() {
     }
 
     let requested = false;
-    const discovery = await discoverAvailableDevices(api, {
-      fallbackDevices: initialDevices,
-      predicate: (device) => isScaleDeviceCandidate(device) && !isR2Device(device),
-      attempts: options.discoveryAttempts,
-      onRetry: options.onDiscoveryRetry
-    });
-    let firstError = discovery.firstError;
-    let refreshedDevices = discovery.devices;
-    const scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+    let firstError: unknown = null;
+    let refreshedDevices = initialDevices;
+    const managedRecovery = appVersionAtLeast(data.appInfo?.version, MANAGED_SCALE_RECOVERY_MIN_VERSION);
+    if (managedRecovery) {
+      try {
+        const scannedDevices = await api.scanDevices({ connect: true, quick: false });
+        const listedDevices = await api.listDevices().catch(() => scannedDevices);
+        refreshedDevices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
+        requested = true;
+        if (hasConnectedScale(refreshedDevices)) {
+          await data.refresh();
+          skinLog("scale_managed_connect_confirmed", { appVersion: data.appInfo?.version ?? null });
+          return { connected: true, requested, found: true, firstError };
+        }
+      } catch (error) {
+        firstError = error;
+        skinLog("scale_managed_connect_failed", { appVersion: data.appInfo?.version ?? null, error: errorMessage(error) });
+      }
+    }
+
+    let scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+    if (!managedRecovery || scaleDevices.length === 0) {
+      const discovery = await discoverAvailableDevices(api, {
+        fallbackDevices: refreshedDevices,
+        predicate: (device) => isScaleDeviceCandidate(device) && !isR2Device(device),
+        attempts: options.discoveryAttempts,
+        onRetry: options.onDiscoveryRetry
+      });
+      firstError ??= discovery.firstError;
+      refreshedDevices = uniqueDevices([...refreshedDevices, ...discovery.devices]).filter(isAvailableDevice);
+      scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+    }
 
     if (hasConnectedScale(refreshedDevices)) {
       await data.refresh();
@@ -2065,7 +2165,7 @@ export function App() {
       found: scaleDevices.length > 0,
       firstError
     };
-  }, [api, data.devices, data.machineState, data.refresh]);
+  }, [api, data.appInfo?.version, data.devices, data.machineState, data.refresh]);
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -2483,7 +2583,9 @@ export function App() {
           onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." })
         });
         if (result.connected) {
-          setStatus({ type: "success", message: "Scale connected. Tap Scale again to tare." });
+          await api.tareScale();
+          await data.refresh();
+          setStatus({ type: "success", message: "Scale connected and tared." });
           return;
         }
         if (result.requested || result.found) {
@@ -2561,7 +2663,9 @@ export function App() {
 
   return (
     <main className={data.settings.menuCollapsed ? "app-shell menu-collapsed" : "app-shell"} style={shellStyle}>
-      {waterLow && waterRefillVisible && !waterRefillAcknowledged && <WaterRefillOverlay detail={waterLowDetail} onConfirm={confirmWaterRefill} />}
+      {waterLow && waterRefillVisible && !waterRefillAcknowledged && !waterRefillAlertSuppressed && (
+        <WaterRefillOverlay detail={waterLowDetail} onConfirm={confirmWaterRefill} />
+      )}
       <TopStatusBar
         indicators={topStatusIndicators}
         expandedStatusId={expandedStatusId}

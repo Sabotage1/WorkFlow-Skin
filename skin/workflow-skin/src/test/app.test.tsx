@@ -107,6 +107,7 @@ function mockReaFetch(
     machineSettings?: Record<string, unknown>;
     advancedMachineSettings?: Record<string, unknown>;
     machineCalibration?: Record<string, unknown>;
+    scaleTareStatuses?: number[];
   } = {}
 ) {
   let savedSettings = initialSettings;
@@ -393,7 +394,9 @@ function mockReaFetch(
       return responseJson(updated);
     }
     if (method === "PUT" && url.pathname === "/api/v1/scale/tare") {
+      const status = options.scaleTareStatuses?.[scaleTareCount];
       scaleTareCount += 1;
+      if (status) return Promise.resolve(new Response("scale unavailable", { status }));
       return Promise.resolve(new Response("", { status: 200 }));
     }
     if (method === "GET" && url.pathname === "/api/v1/steams") return responseJson(options.steams ?? []);
@@ -2846,6 +2849,32 @@ describe("App shell", () => {
     );
   });
 
+  it("uses the app-managed scale recovery path on Decaid 0.7.13 and newer", async () => {
+    let poweredOn = false;
+    const fetchState = mockReaFetch(initialSettings, {
+      appInfo: { localIp: "192.168.1.20", version: "0.7.15" },
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected", available: false }],
+      scanDevicesResult: ({ connect }) =>
+        poweredOn && connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }] : []
+    });
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    poweredOn = true;
+    fetchState.fetchMock.mockClear();
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
+      expect.anything()
+    );
+  });
+
   it("connects the scale when pressing a Scale indicator backed only by stale sensor data", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       sensors: [detectedScaleSensor],
@@ -3022,6 +3051,23 @@ describe("App shell", () => {
     expect(fetchState.scanCount).toBe(scansBeforeTap);
   });
 
+  it("reconnects and retries tare in one press when connected scale status is stale", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      appInfo: { localIp: "192.168.1.20", version: "0.7.15" },
+      machineState: { connected: true, state: { state: "idle" }, scale: { connected: true } },
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected", available: true }],
+      scanDevicesResult: ({ connect }) =>
+        connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }] : [],
+      scaleTareStatuses: [404]
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected and tared."), { timeout: 2500 });
+    expect(fetchState.scaleTareCount).toBe(2);
+  });
+
   it("connects a scale returned only by the scan response", async () => {
     let poweredOn = false;
     const fetchState = mockReaFetch(initialSettings, {
@@ -3174,7 +3220,7 @@ describe("App shell", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Water" }));
 
     expect(screen.getByText("Current water level")).toBeInTheDocument();
-    expect(screen.getByText("38mm · 63%")).toBeInTheDocument();
+    expect(screen.getByText("38mm · ≈1,270mL · 63%")).toBeInTheDocument();
   });
 
   it("shows a refill screen when the tank is at the refill level", async () => {
@@ -3189,10 +3235,10 @@ describe("App shell", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(screen.getByRole("button", { name: "Water" })).toHaveAttribute("title", "Water: Low 9mm · 15%");
+    expect(screen.getByRole("button", { name: "Water" })).toHaveAttribute("title", "Water: Low 9mm · ≈300mL · 15%");
     expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4999);
+      await vi.advanceTimersByTimeAsync(9999);
     });
     expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
     await act(async () => {
@@ -3225,12 +3271,52 @@ describe("App shell", () => {
     expect(screen.getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Refill");
     expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(10000);
     });
 
     const dialog = screen.getByRole("dialog", { name: "Water refill needed" });
 
     expect(within(dialog).getByText("The machine is asking for a refill.")).toBeInTheDocument();
+  });
+
+  it("never interrupts a brew and starts a fresh ten-second refill delay after the shot", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: {
+        connected: true,
+        state: { state: "espresso", substate: "pouring" },
+        waterLevels: { currentLevel: 9, refillLevel: 15 }
+      }
+    });
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
+
+    fetchState.setMachineState({
+      connected: true,
+      state: { state: "idle" },
+      waterLevels: { currentLevel: 9, refillLevel: 15 }
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9999);
+    });
+    expect(screen.queryByRole("dialog", { name: "Water refill needed" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByRole("dialog", { name: "Water refill needed" })).toBeInTheDocument();
   });
 
   it("registers touch activity passively so Android WebView can scroll immediately", async () => {

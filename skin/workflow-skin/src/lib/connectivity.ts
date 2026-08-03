@@ -1,6 +1,7 @@
 import type { AppInfo, DeviceInfo, MachineState, SensorListItem, WaterLevels } from "../api/types";
 
 const DEFAULT_TANK_LEVEL_MM = 60;
+const DEFAULT_TANK_CAPACITY_ML = 2000;
 
 export interface ConnectivityStatus {
   id: "machine" | "wifi" | "scale" | "water" | "r2";
@@ -140,6 +141,20 @@ function waterTankFullLevel(waterLevels: WaterLevels | null | undefined): number
   return full ?? DEFAULT_TANK_LEVEL_MM;
 }
 
+function waterTankCapacityMl(waterLevels: WaterLevels | null | undefined): number {
+  if (!waterLevels || typeof waterLevels !== "object") return DEFAULT_TANK_CAPACITY_ML;
+  const record = waterLevels as Record<string, unknown>;
+  const candidates = [record.capacityMl, record.tankCapacityMl, record.maxVolumeMl, record.fullVolumeMl];
+  const capacity = candidates.find((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  return capacity ?? DEFAULT_TANK_CAPACITY_ML;
+}
+
+function estimatedWaterVolumeMl(waterLevels: WaterLevels | null | undefined, currentLevel: number): number {
+  const capacity = waterTankCapacityMl(waterLevels);
+  const ratio = Math.max(0, Math.min(1, currentLevel / waterTankFullLevel(waterLevels)));
+  return Math.round((ratio * capacity) / 10) * 10;
+}
+
 function waterStatus(waterLevels: WaterLevels | null | undefined): ConnectivityStatus {
   const currentLevel = waterLevels?.currentLevel;
   const refillLevel = waterLevels?.refillLevel;
@@ -148,11 +163,12 @@ function waterStatus(waterLevels: WaterLevels | null | undefined): ConnectivityS
   }
   const rounded = Math.round(currentLevel);
   const percent = Math.max(0, Math.min(100, Math.round((currentLevel / waterTankFullLevel(waterLevels)) * 100)));
+  const estimatedMl = estimatedWaterVolumeMl(waterLevels, currentLevel).toLocaleString("en-US");
   const low = typeof refillLevel === "number" && Number.isFinite(refillLevel) && currentLevel <= refillLevel;
   return {
     id: "water",
     label: "Water",
-    detail: low ? `Low ${rounded}mm · ${percent}%` : `${rounded}mm · ${percent}%`,
+    detail: low ? `Low ${rounded}mm · ≈${estimatedMl}mL · ${percent}%` : `${rounded}mm · ≈${estimatedMl}mL · ${percent}%`,
     connected: !low
   };
 }

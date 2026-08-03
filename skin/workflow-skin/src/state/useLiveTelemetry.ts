@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiWebSocketBaseUrl } from "../api/reaprime";
 import type { ShotSnapshot, WaterLevels, WeightSnapshot } from "../api/types";
 import { appendLiveMeasurement } from "../lib/liveMeasurements";
+import { parseShotLifecycle, retainLatestFinishedShotLifecycle, type ShotLifecycle } from "../lib/shotLifecycle";
 
 export interface LiveTelemetryOptions {
   recordIdle?: boolean;
@@ -88,6 +89,8 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
   const [scaleConnected, setScaleConnected] = useState(false);
   const [waterLevels, setWaterLevels] = useState<WaterLevels | null>(null);
   const [machineMode, setMachineMode] = useState<{ state?: string; substate?: string } | null>(null);
+  const [shotLifecycle, setShotLifecycle] = useState<ShotLifecycle | null>(null);
+  const [latestFinishedShotLifecycle, setLatestFinishedShotLifecycle] = useState<ShotLifecycle | null>(null);
   const lastMachineRef = useRef<ShotSnapshot["machine"] | null>(null);
   const lastScaleRef = useRef<WeightSnapshot | null>(null);
   const recordIdleRef = useRef(options.recordIdle ?? false);
@@ -145,10 +148,26 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       if (levels) setWaterLevels(levels);
     });
 
+    connect("/ws/v1/machine/shotState", (data) => {
+      const lifecycle = parseShotLifecycle(data);
+      if (!lifecycle) return;
+      setShotLifecycle(lifecycle);
+      setLatestFinishedShotLifecycle((current) => retainLatestFinishedShotLifecycle(current, lifecycle));
+    });
+
     return () => {
       for (const socket of sockets) socket.close();
     };
   }, [baseUrl]);
 
-  return { measurements, scaleSnapshot, scaleConnected, waterLevels, machineMode, getLatestScaleSnapshot };
+  return {
+    measurements,
+    scaleSnapshot,
+    scaleConnected,
+    waterLevels,
+    machineMode,
+    shotLifecycle,
+    latestFinishedShotLifecycle,
+    getLatestScaleSnapshot
+  };
 }
