@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiWebSocketBaseUrl } from "../api/reaprime";
 import type { ShotSnapshot, WaterLevels, WeightSnapshot } from "../api/types";
-import { appendLiveMeasurement } from "../lib/liveMeasurements";
+import { appendLiveMeasurement, shouldClearForShotStart } from "../lib/liveMeasurements";
 import { parseShotLifecycle, retainLatestFinishedShotLifecycle, type ShotLifecycle } from "../lib/shotLifecycle";
 
 export interface LiveTelemetryOptions {
-  recordIdle?: boolean;
+  streamScale?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,13 +93,14 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
   const [latestFinishedShotLifecycle, setLatestFinishedShotLifecycle] = useState<ShotLifecycle | null>(null);
   const lastMachineRef = useRef<ShotSnapshot["machine"] | null>(null);
   const lastScaleRef = useRef<WeightSnapshot | null>(null);
-  const recordIdleRef = useRef(options.recordIdle ?? false);
+  const streamScaleRef = useRef(options.streamScale ?? false);
   const brewingRef = useRef(false);
+  const activeShotIdRef = useRef<string | null>(null);
   const getLatestScaleSnapshot = useCallback(() => lastScaleRef.current, []);
 
   useEffect(() => {
-    recordIdleRef.current = options.recordIdle ?? false;
-  }, [options.recordIdle]);
+    streamScaleRef.current = options.streamScale ?? false;
+  }, [options.streamScale]);
 
   useEffect(() => {
     if (isTestBrowser() || typeof WebSocket !== "function") return;
@@ -121,7 +122,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       const nextMode = { state: machine.state?.state, substate: machine.state?.substate };
       setMachineMode((current) => (current?.state === nextMode.state && current?.substate === nextMode.substate ? current : nextMode));
 
-      if (recordIdleRef.current || brewingRef.current) {
+      if (brewingRef.current) {
         setMeasurements((current) => appendLiveMeasurement(current, { machine, scale: lastScaleRef.current ?? undefined }, startsNewBrew));
       }
     });
@@ -137,8 +138,8 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       if (!scale) return;
       lastScaleRef.current = scale;
       setScaleConnected((current) => (current ? current : true));
-      if (recordIdleRef.current || brewingRef.current) setScaleSnapshot(scale);
-      if ((recordIdleRef.current || brewingRef.current) && lastMachineRef.current) {
+      if (streamScaleRef.current || brewingRef.current) setScaleSnapshot(scale);
+      if (brewingRef.current && lastMachineRef.current) {
         setMeasurements((current) => appendLiveMeasurement(current, { machine: lastMachineRef.current ?? undefined, scale }));
       }
     });
@@ -151,6 +152,14 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     connect("/ws/v1/machine/shotState", (data) => {
       const lifecycle = parseShotLifecycle(data);
       if (!lifecycle) return;
+      if (shouldClearForShotStart(lifecycle, activeShotIdRef.current, brewingRef.current)) {
+        setMeasurements([]);
+      }
+      if (lifecycle.shotId && lifecycle.state !== "idle") activeShotIdRef.current = lifecycle.shotId;
+      if (lifecycle.state === "idle") activeShotIdRef.current = null;
+      if (typeof lifecycle.scaleConnected === "boolean") {
+        setScaleConnected((current) => (current === lifecycle.scaleConnected ? current : lifecycle.scaleConnected!));
+      }
       setShotLifecycle(lifecycle);
       setLatestFinishedShotLifecycle((current) => retainLatestFinishedShotLifecycle(current, lifecycle));
     });

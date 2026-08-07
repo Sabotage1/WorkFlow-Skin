@@ -126,6 +126,7 @@ button {
   font-weight: 900;
   text-transform: uppercase;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .top-status-chip:hover,

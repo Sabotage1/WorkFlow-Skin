@@ -1,25 +1,22 @@
 import type { ShotSnapshot } from "../api/types";
+import type { ShotLifecycle } from "./shotLifecycle";
 
-export const LIVE_GRAPH_WARMUP_MS = 3000;
-export const MAX_LIVE_SAMPLES = 180;
+// The machine and scale WebSockets can jointly deliver roughly 20 samples a
+// second. Keep enough samples for a six-minute extraction instead of turning
+// the live chart into a roughly ten-second sliding window.
+export const MAX_LIVE_SAMPLES = 7200;
 
-function snapshotTimestampMs(snapshot: ShotSnapshot): number | null {
-  const timestamp = snapshot.machine?.timestamp ?? snapshot.scale?.timestamp;
-  if (!timestamp) return null;
-
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-export function trimLiveGraphWarmup(measurements: ShotSnapshot[]): ShotSnapshot[] {
-  const startTimestamp = measurements.map(snapshotTimestampMs).find((timestamp): timestamp is number => timestamp !== null);
-
-  if (startTimestamp === undefined) return measurements;
-
-  return measurements.filter((snapshot) => {
-    const timestamp = snapshotTimestampMs(snapshot);
-    return timestamp === null || timestamp - startTimestamp >= LIVE_GRAPH_WARMUP_MS;
-  });
+export function shouldClearForShotStart(
+  lifecycle: Pick<ShotLifecycle, "shotId" | "state">,
+  activeShotId: string | null,
+  machineBrewing: boolean
+): boolean {
+  return (
+    Boolean(lifecycle.shotId) &&
+    lifecycle.shotId !== activeShotId &&
+    lifecycle.state === "preheating" &&
+    !machineBrewing
+  );
 }
 
 export function appendLiveMeasurement(

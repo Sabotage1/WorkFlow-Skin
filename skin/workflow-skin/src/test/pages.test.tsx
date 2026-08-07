@@ -281,7 +281,7 @@ describe("LivePage", () => {
     }
   });
 
-  it("does not show the first three seconds of noisy live graph measurements", () => {
+  it("keeps the full live brew timeline from its first real sample", () => {
     render(
       <LivePage
         workflow={{ context: { targetDoseWeight: 18, targetYield: 36 } }}
@@ -297,7 +297,7 @@ describe("LivePage", () => {
       />
     );
 
-    expect(screen.getByLabelText("Shot Timer: 1 s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Shot Timer: 4 s")).toBeInTheDocument();
     expect(screen.getByLabelText("Weight: 30.00 g")).toBeInTheDocument();
   });
 
@@ -315,8 +315,8 @@ describe("LivePage", () => {
       />
     );
 
-    expect(screen.getByLabelText("Shot Timer: 16 s")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Shot Timer: 19 s")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Shot Timer: 19 s")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Shot Timer: 16 s")).not.toBeInTheDocument();
   });
 });
 

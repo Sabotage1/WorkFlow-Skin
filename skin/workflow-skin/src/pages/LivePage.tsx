@@ -4,7 +4,6 @@ import { MetricTile } from "../components/MetricTile";
 import { machineStateLabel } from "../lib/machineState";
 import { ShotGraph } from "../components/ShotGraph";
 import type { DrinkWorkflowRunState } from "../lib/drinkWorkflows";
-import { trimLiveGraphWarmup } from "../lib/liveMeasurements";
 import { shotStats } from "../lib/shotStats";
 import { useEffect, useRef } from "react";
 
@@ -133,8 +132,7 @@ export function LivePage({
   drinkWorkflowProfiles?: ProfileRecord[];
   onCancelDrinkWorkflow?: () => Promise<void> | void;
 }) {
-  const rawMeasurements = liveMeasurements.length ? liveMeasurements : latestShot?.measurements ?? [];
-  const measurements = trimLiveGraphWarmup(rawMeasurements);
+  const measurements = liveMeasurements.length ? liveMeasurements : latestShot?.measurements ?? [];
   const stats = latestShot ? shotStats({ ...latestShot, measurements }) : shotStats({ id: "live", timestamp: new Date().toISOString(), workflow, measurements });
   const latest = latestMeasurement(measurements);
   const weight = liveWeight(measurements, scaleSnapshot) ?? stats.finalYield;

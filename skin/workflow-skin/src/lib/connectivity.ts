@@ -220,7 +220,10 @@ export function buildConnectivityStatuses({
     const hasDisconnectedR2Device = r2Devices.some((device) => isDisconnectedDeviceState(device.state));
     const hasConnectedR2Device = r2Devices.some((device) => isConnectedDeviceState(device.state));
     const connected =
-      Boolean(r2Connected) || hasConnectedR2Device || (!nativeDevicesAvailable && !hasDisconnectedR2Device && r2Devices.length === 0 && r2Sensor?.id === r2SensorId);
+      Boolean(r2Sensor) &&
+      (Boolean(r2Connected) ||
+        hasConnectedR2Device ||
+        (!nativeDevicesAvailable && !hasDisconnectedR2Device && r2Devices.length === 0 && r2Sensor?.id === r2SensorId));
     statuses.push({ id: "r2", label: "R2", detail: connected ? "Connected" : "Not connected", connected });
   }
 

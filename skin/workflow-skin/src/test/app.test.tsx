@@ -1765,7 +1765,7 @@ describe("App shell", () => {
     );
   });
 
-  it("tares the scale and stays on brew when espresso returns idle without a new shot", async () => {
+  it("stays on brew without issuing a late tare when espresso returns idle without a saved shot", async () => {
     vi.useFakeTimers();
     const previousShot: ShotRecord = {
       id: "previous-shot",
@@ -1807,8 +1807,8 @@ describe("App shell", () => {
 
     expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
-    expect(fetchState.scaleTareCount).toBe(1);
-    expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
+    expect(fetchState.scaleTareCount).toBe(0);
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.anything());
   });
 
   it("measures R2 twenty seconds after the shot reaches the review page", async () => {
@@ -2563,18 +2563,23 @@ describe("App shell", () => {
   });
 
   it("discovers the configured R2 before requesting its connection", async () => {
+    let poweredOn = false;
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         sensors: [],
         devices: [],
         sensorsAfterScan: [detectedR2Sensor],
-        scanDevicesResult: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true }]
+        scanDevicesResult: () =>
+          poweredOn
+            ? [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true }]
+            : []
       }
     );
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
+    poweredOn = true;
     fetchState.fetchMock.mockClear();
     await userEvent.click(screen.getByRole("button", { name: "R2" }));
 
@@ -2777,6 +2782,7 @@ describe("App shell", () => {
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
         sensors: [],
+        sensorsAfterScan: [detectedR2Sensor],
         devices: [r2Device("disconnected", false)],
         scanDevicesResult: () => (allowConnected ? [r2Device("discovered")] : [])
       }
@@ -2849,13 +2855,13 @@ describe("App shell", () => {
     );
   });
 
-  it("uses the app-managed scale recovery path on Decaid 0.7.13 and newer", async () => {
+  it("uses deterministic discovery and explicit connection from the Scale indicator on current Decaid", async () => {
     let poweredOn = false;
     const fetchState = mockReaFetch(initialSettings, {
       appInfo: { localIp: "192.168.1.20", version: "0.7.15" },
       devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected", available: false }],
       scanDevicesResult: ({ connect }) =>
-        poweredOn && connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }] : []
+        poweredOn && !connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "discovered", available: true }] : []
     });
     render(<App />);
 
@@ -2866,12 +2872,12 @@ describe("App shell", () => {
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
     );
-    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
-      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
-      expect.anything()
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "scale-1" }) })
     );
   });
 
@@ -3057,7 +3063,7 @@ describe("App shell", () => {
       machineState: { connected: true, state: { state: "idle" }, scale: { connected: true } },
       devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "disconnected", available: true }],
       scanDevicesResult: ({ connect }) =>
-        connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }] : [],
+        !connect ? [{ id: "scale-1", name: "Acaia", type: "scale", state: "discovered", available: true }] : [],
       scaleTareStatuses: [404]
     });
     render(<App />);
@@ -3137,6 +3143,7 @@ describe("App shell", () => {
   it("automatically reconnects a BooKoo scale after it later appears disconnected", async () => {
     vi.useFakeTimers();
     const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
       devices: [{ id: "bookoo-themis", name: "BooKoo Themis", type: "sensor", state: "connected" }]
     });
     render(<App />);

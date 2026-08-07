@@ -47,7 +47,6 @@ import type { CommunityRecommendation, DownloadedCommunityProfile, UploadedCommu
 import type { Bag } from "./lib/bags";
 import { buildConnectivityStatuses } from "./lib/connectivity";
 import type { ConnectivityStatus } from "./lib/connectivity";
-import { trimLiveGraphWarmup } from "./lib/liveMeasurements";
 import {
   DrinkWorkflowCanceledError,
   runDrinkWorkflow as executeDrinkWorkflow
@@ -122,7 +121,7 @@ const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const WATER_REFILL_POPUP_DELAY_MS = 10_000;
 const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1000];
-const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750, 1500];
+const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 350, 1000, 2000, 4000];
 const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 2;
 const DEVICE_DISCOVERY_RETRY_DELAY_MS = 350;
 const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
@@ -507,9 +506,8 @@ function latestMachineSnapshot(measurements: ShotSnapshot[]): ShotSnapshot["mach
 }
 
 function shotWithFallbackMeasurements(shot: ShotRecord, fallbackMeasurements: ShotSnapshot[]): ShotRecord {
-  const trimmedFallbackMeasurements = trimLiveGraphWarmup(fallbackMeasurements);
-  if ((shot.measurements?.length ?? 0) > 0 || trimmedFallbackMeasurements.length === 0) return shot;
-  return { ...shot, measurements: trimmedFallbackMeasurements };
+  if ((shot.measurements?.length ?? 0) > 0 || fallbackMeasurements.length === 0) return shot;
+  return { ...shot, measurements: fallbackMeasurements };
 }
 
 async function loadCompletedShot(
@@ -518,11 +516,13 @@ async function loadCompletedShot(
   fallbackLatestShot: ShotRecord | null
 ): Promise<ShotRecord | null> {
   if (completed.shotId) {
-    for (const delay of [0, 150, 450, 900]) {
+    for (const delay of [0, 150, 450, 900, 1500, 2500]) {
       if (delay > 0) await waitForNativeUpdate(delay);
       const shot = await api.getShot(completed.shotId).catch(() => null);
       if (shot) return shot;
     }
+    const latestShot = await api.getLatestShot().catch(() => null);
+    return latestShot?.id === completed.shotId ? latestShot : null;
   }
   return api.getLatestShot().catch(() => fallbackLatestShot);
 }
@@ -768,6 +768,7 @@ export function App() {
   const [waterRefillAcknowledged, setWaterRefillAcknowledged] = useState(false);
   const [waterRefillVisible, setWaterRefillVisible] = useState(false);
   const [completedReviewShot, setCompletedReviewShot] = useState<ShotRecord | null>(null);
+  const [completedReviewLoading, setCompletedReviewLoading] = useState(false);
   const [communityRecommendations, setCommunityRecommendations] = useState<CommunityRecommendation[]>([]);
   const [communityError, setCommunityError] = useState<string | null>(null);
   const [communityLoading, setCommunityLoading] = useState(false);
@@ -817,7 +818,7 @@ export function App() {
   const api = useMemo(() => new ReaPrimeApi(), []);
   const data = useReaData(api);
   const communityApi = useMemo(() => new CommunityApi(data.settings.communityApiBaseUrl), [data.settings.communityApiBaseUrl]);
-  const liveTelemetry = useLiveTelemetry(undefined, { recordIdle: page === "live" });
+  const liveTelemetry = useLiveTelemetry(undefined, { streamScale: page === "live" });
   const latestShot = data.shots[0] ?? null;
   const nativeDevices = data.devices ?? [];
   const detectedR2Sensor = findDifluidR2Sensor(data.sensors);
@@ -826,7 +827,7 @@ export function App() {
   const connectedR2Device = nativeDevices.find(
     (device) => (isConfiguredR2Device(device, data.settings.r2SensorId) || isR2Device(device)) && isConnectedDevice(device)
   );
-  const r2DeviceConnected = Boolean(connectedR2Device);
+  const r2DeviceConnected = Boolean(connectedR2Device && r2Sensor);
   const r2Available = Boolean(r2Sensor || data.settings.r2SensorId || connectedR2Device);
   const workflowSelectedProfileId = selectedProfileIdFromWorkflow(data.workflow, data.profiles);
   const selectedProfileId = startupProfileHoldId ?? workflowSelectedProfileId;
@@ -835,7 +836,11 @@ export function App() {
   const workflowPageProfileId = selectedProfileId ?? (page === "steam" || page === "review" ? lastCompletedProfileId : undefined);
   const activeProfile = data.profiles.find((profile) => profile.id === workflowPageProfileId);
   const refreshedCompletedReviewShot = completedReviewShot ? data.shots.find((shot) => shot.id === completedReviewShot.id) : undefined;
-  const reviewShot = completedReviewShot ? mergeReviewShot(completedReviewShot, refreshedCompletedReviewShot) : latestShot;
+  const reviewShot = completedReviewLoading
+    ? null
+    : completedReviewShot
+      ? mergeReviewShot(completedReviewShot, refreshedCompletedReviewShot)
+      : latestShot;
   const activeProfileWorkflow = profileWorkflowFor(data.settings, workflowPageProfileId);
   const visualizerPlugin = data.plugins?.find((plugin) => plugin.id === "visualizer.reaplugin") ?? null;
   const topLiveMachine = latestMachineSnapshot(liveTelemetry.measurements);
@@ -1477,24 +1482,35 @@ export function App() {
       completedActivityRoutingRef.current = true;
       if (completed.shotId) lastHandledShotLifecycleIdRef.current = completed.shotId;
       try {
-        if (completed.activity === "brew") setPage("review");
+        if (completed.activity === "brew") {
+          setCompletedReviewLoading(true);
+          setCompletedReviewShot(null);
+          setPage("review");
+        }
         await data.refresh();
         if (completed.activity === "brew") {
           const latestCompletedShot = await loadCompletedShot(api, completed, latestShot);
           if (!latestCompletedShot || (completed.startLatestShotId !== undefined && latestCompletedShot.id === completed.startLatestShotId)) {
+            if (completed.shotId) {
+              const pendingShot: ShotRecord = {
+                id: completed.shotId,
+                timestamp: new Date().toISOString(),
+                workflow: data.workflow,
+                measurements: liveTelemetry.measurements
+              };
+              setCompletedReviewShot(pendingShot);
+              setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
+              ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
+              skinLog("brew_completed_pending_persistence", { shotId: completed.shotId });
+              setPage("review");
+              return;
+            }
+
             setCompletedReviewShot(null);
             setAutoReadR2ShotId(null);
             autoReadR2ShotIdRef.current = null;
             ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-            skinLog("brew_canceled", { startLatestShotId: completed.startLatestShotId ?? null });
-            try {
-              await api.tareScale();
-              skinLog("scale_tare_after_canceled_brew", { ok: true });
-            } catch (error) {
-              skinLog("scale_tare_after_canceled_brew", { ok: false, error: errorMessage(error) });
-              setStatus({ type: "error", message: `Shot canceled. Could not tare scale: ${errorMessage(error)}` });
-            }
-            await data.refresh();
+            skinLog("brew_ended_without_saved_shot", { startLatestShotId: completed.startLatestShotId ?? null });
             setPage("brew");
             return;
           }
@@ -1518,10 +1534,11 @@ export function App() {
         ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
         setPage("review");
       } finally {
+        setCompletedReviewLoading(false);
         completedActivityRoutingRef.current = false;
       }
     },
-    [api, data.profiles, data.refresh, latestShot, liveTelemetry.measurements, r2Available]
+    [api, data.profiles, data.refresh, data.workflow, latestShot, liveTelemetry.measurements, r2Available]
   );
 
   useEffect(() => {
@@ -1956,7 +1973,10 @@ export function App() {
 
       let firstConnectError: unknown = null;
       for (const device of r2Devices) {
-        if (!isConnectedDevice(device)) {
+        const sensorAlreadyUsable =
+          data.sensors.some((sensor) => sensor.id === device.id) ||
+          Boolean(findDifluidR2Sensor(data.sensors));
+        if (!isConnectedDevice(device) || (options.forceConfiguredConnect === true && !sensorAlreadyUsable)) {
           try {
             await api.connectDevice(device.id);
           } catch (error) {
@@ -1976,7 +1996,10 @@ export function App() {
             (item) => item.id === device.id && isAvailableDevice(item) && isConnectedDevice(item)
           );
           const connectedSensor = sensors.find((sensor) => sensor.id === device.id) ?? findDifluidR2Sensor(sensors);
-          if (!connectedDevice && !connectedSensor) continue;
+          if (!connectedSensor) {
+            if (connectedDevice) skinLog("r2_device_connected_sensor_pending", { deviceId: device.id });
+            continue;
+          }
 
           const sensorId = connectedSensor?.id ?? device.id;
           await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
@@ -2089,7 +2112,7 @@ export function App() {
   };
 
   const requestScaleConnection = useCallback(async (
-    options: { discoveryAttempts?: number; onDiscoveryRetry?: (attempt: number) => void } = {}
+    options: { discoveryAttempts?: number; onDiscoveryRetry?: (attempt: number) => void; forceDiscovery?: boolean } = {}
   ) => {
     await wakeMachineIfNeeded(api, data.machineState);
     const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
@@ -2102,7 +2125,7 @@ export function App() {
     let firstError: unknown = null;
     let refreshedDevices = initialDevices;
     const managedRecovery = appVersionAtLeast(data.appInfo?.version, MANAGED_SCALE_RECOVERY_MIN_VERSION);
-    if (managedRecovery) {
+    if (managedRecovery && !options.forceDiscovery) {
       try {
         const scannedDevices = await api.scanDevices({ connect: true, quick: false });
         const listedDevices = await api.listDevices().catch(() => scannedDevices);
@@ -2120,7 +2143,7 @@ export function App() {
     }
 
     let scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-    if (!managedRecovery || scaleDevices.length === 0) {
+    if (options.forceDiscovery || !managedRecovery || scaleDevices.length === 0) {
       const discovery = await discoverAvailableDevices(api, {
         fallbackDevices: refreshedDevices,
         predicate: (device) => isScaleDeviceCandidate(device) && !isR2Device(device),
@@ -2183,6 +2206,7 @@ export function App() {
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
+    if (!isIdleMode(currentMachineMode)) return;
     const disconnectedScales = disconnectedScaleDevices(nativeDevices);
     if (disconnectedScales.length === 0 || hasConnectedScale(nativeDevices)) {
       scaleReconnectRef.current.signature = null;
@@ -2198,12 +2222,12 @@ export function App() {
     reconnectState.signature = signature;
     reconnectState.lastAttemptAt = now;
     reconnectState.pending = true;
-    void requestScaleConnection()
+    void requestScaleConnection({ discoveryAttempts: 1, forceDiscovery: true })
       .catch(() => undefined)
       .finally(() => {
         scaleReconnectRef.current.pending = false;
       });
-  }, [data.loaded, machineSleeping, nativeDevices, page, requestScaleConnection]);
+  }, [currentMachineMode, data.loaded, machineSleeping, nativeDevices, page, requestScaleConnection]);
 
   const saveBag = async (bag: Bag) => {
     const bean = await api.createBean({
@@ -2543,7 +2567,8 @@ export function App() {
     try {
       const result = await requestScaleConnection({
         discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
-        onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." })
+        onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
+        forceDiscovery: true
       });
       if (result.connected) {
         setStatus({ type: "success", message: "Scale connected." });
@@ -2580,7 +2605,8 @@ export function App() {
       try {
         const result = await requestScaleConnection({
           discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
-          onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." })
+          onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
+          forceDiscovery: true
         });
         if (result.connected) {
           await api.tareScale();
