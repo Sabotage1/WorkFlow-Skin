@@ -15,6 +15,7 @@ import type {
   PluginManifest,
   Profile,
   ProfileRecord,
+  ReaPrimeSettings,
   SensorListItem,
   ShotPage,
   ShotRecord,
@@ -392,6 +393,17 @@ export class ReaPrimeApi {
     return this.request<AppInfo>("/api/v1/info");
   }
 
+  getSettings() {
+    return this.request<ReaPrimeSettings>("/api/v1/settings");
+  }
+
+  updateSettings(patch: Partial<ReaPrimeSettings>) {
+    return this.request<void>("/api/v1/settings", {
+      method: "POST",
+      body: JSON.stringify(patch)
+    });
+  }
+
   getDecentAccount() {
     return this.request<DecentAccountStatus>("/api/v1/account/decent");
   }
@@ -512,6 +524,18 @@ export class ReaPrimeApi {
     return this.request<void>("/api/v1/scale/tare", {
       method: "PUT"
     });
+  }
+
+  startScaleTimer() {
+    return this.request<void>("/api/v1/scale/timer/start", { method: "PUT" });
+  }
+
+  stopScaleTimer() {
+    return this.request<void>("/api/v1/scale/timer/stop", { method: "PUT" });
+  }
+
+  resetScaleTimer() {
+    return this.request<void>("/api/v1/scale/timer/reset", { method: "PUT" });
   }
 
   requestMachineState(state: string) {

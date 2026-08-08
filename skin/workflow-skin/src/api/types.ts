@@ -229,6 +229,14 @@ export interface AppInfo {
   localIp?: string;
 }
 
+export interface ReaPrimeSettings {
+  gatewayMode?: "disabled" | "tracking" | "full" | string;
+  blockOnNoScale?: boolean;
+  blockTareDuringShot?: boolean;
+  preferredScaleId?: string | null;
+  weightFlowMultiplier?: number;
+}
+
 export interface DecentAccountStatus {
   connected?: boolean;
   username?: string;

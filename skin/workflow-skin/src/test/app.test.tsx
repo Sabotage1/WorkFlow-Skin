@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import skinManifest from "../../skin-manifest.json";
 import { App } from "../App";
-import type { AppInfo, Bean, BeanBatch, DecentAccountStatus, DeviceInfo, Grinder, MachineState, ProfileRecord, SensorListItem, ShotRecord } from "../api/types";
+import type { AppInfo, Bean, BeanBatch, DecentAccountStatus, DeviceInfo, Grinder, MachineState, ProfileRecord, ReaPrimeSettings, SensorListItem, ShotRecord } from "../api/types";
 import type { CommunityDownloadPayload, CommunityRecommendation } from "../community/types";
 import { defaultSkinSettings, type SkinSettings } from "../state/skinSettings";
 
@@ -107,6 +107,7 @@ function mockReaFetch(
     machineSettings?: Record<string, unknown>;
     advancedMachineSettings?: Record<string, unknown>;
     machineCalibration?: Record<string, unknown>;
+    nativeSettings?: ReaPrimeSettings;
     scaleTareStatuses?: number[];
   } = {}
 ) {
@@ -133,6 +134,7 @@ function mockReaFetch(
     refillKitSetting: 2
   };
   let machineCalibration = options.machineCalibration ?? { flowMultiplier: 1 };
+  let nativeSettings: ReaPrimeSettings = options.nativeSettings ?? { gatewayMode: "disabled" };
   let workflowUpdateCount = 0;
   let displayState = options.displayState ?? { brightness: 100, wakeLockOverride: true };
   let machineState = options.machineState ?? { connected: true, wifi: { connected: true, ipAddress: "192.168.1.20" } };
@@ -322,6 +324,11 @@ function mockReaFetch(
       return Promise.resolve(new Response("", { status: 200 }));
     }
     if (method === "GET" && url.pathname === "/api/v1/info") return responseJson(options.appInfo ?? { localIp: "192.168.1.20", version: "0.7.6" });
+    if (method === "GET" && url.pathname === "/api/v1/settings") return responseJson(nativeSettings);
+    if (method === "POST" && url.pathname === "/api/v1/settings") {
+      nativeSettings = { ...nativeSettings, ...JSON.parse(String(init.body)) };
+      return Promise.resolve(new Response("", { status: 200 }));
+    }
     if (method === "GET" && url.pathname === "/api/v1/devices") return responseJson(devices);
     if (method === "GET" && url.pathname === "/api/v1/devices/scan") {
       const quickParam = url.searchParams.has("quick") ? url.searchParams.get("quick") === "true" : undefined;
@@ -397,6 +404,9 @@ function mockReaFetch(
       const status = options.scaleTareStatuses?.[scaleTareCount];
       scaleTareCount += 1;
       if (status) return Promise.resolve(new Response("scale unavailable", { status }));
+      return Promise.resolve(new Response("", { status: 200 }));
+    }
+    if (method === "PUT" && url.pathname.startsWith("/api/v1/scale/timer/")) {
       return Promise.resolve(new Response("", { status: 200 }));
     }
     if (method === "GET" && url.pathname === "/api/v1/steams") return responseJson(options.steams ?? []);
@@ -520,6 +530,9 @@ function mockReaFetch(
     get machineCalibration() {
       return machineCalibration;
     },
+    get nativeSettings() {
+      return nativeSettings;
+    },
     setMachineState(next: MachineState) {
       machineState = next;
     },
@@ -596,6 +609,21 @@ describe("App shell", () => {
 
     expect(screen.getByRole("heading", { name: "Bags" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Bag Filters" })).toBeInTheDocument();
+  });
+
+  it("restores native tare, timer, and weight-stop by moving Full gateway mode to Tracking while idle", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
+      nativeSettings: { gatewayMode: "full" }
+    });
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.nativeSettings.gatewayMode).toBe("tracking"));
+
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/settings",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ gatewayMode: "tracking" }) })
+    );
   });
 
   it("writes structured skin logs to the console for machine log capture", async () => {
@@ -1719,6 +1747,48 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
+  it("waits on Review for delayed shot persistence instead of flashing back to Brew", async () => {
+    vi.useFakeTimers();
+    const previousShot: ShotRecord = {
+      id: "previous-shot",
+      timestamp: "2026-06-12T09:30:00.000Z",
+      workflow: { context: { targetYield: 36 } },
+      measurements: []
+    };
+    const completedShot: ShotRecord = {
+      id: "delayed-shot",
+      timestamp: "2026-06-12T10:00:00.000Z",
+      workflow: { profile: profiles[0].profile, context: { targetYield: 36 } },
+      measurements: [
+        { machine: { timestamp: "2026-06-12T10:00:00.000Z", pressure: 1, state: { state: "espresso", substate: "preinfusion" } }, scale: { weight: 0 } },
+        { machine: { timestamp: "2026-06-12T10:00:25.000Z", pressure: 8, state: { state: "espresso", substate: "pouring" } }, scale: { weight: 36 } }
+      ]
+    };
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
+      shots: [previousShot]
+    });
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "espresso", substate: "pouring" } });
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(screen.getByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    window.setTimeout(() => fetchState.setShots([completedShot, previousShot]), 1200);
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+
+    expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+    expect(screen.getByText("Duration: 25s")).toBeInTheDocument();
+  });
+
   it("saves a corrected review bag to the shot workflow context", async () => {
     const latestShot: ShotRecord = {
       id: "wrong-bag-shot",
@@ -1804,6 +1874,7 @@ describe("App shell", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    await act(async () => vi.advanceTimersByTimeAsync(10_500));
 
     expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
@@ -3164,6 +3235,37 @@ describe("App shell", () => {
       await Promise.resolve();
     });
 
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/connect",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "bookoo-themis" }) })
+    );
+  });
+
+  it("runs full discovery when a remembered scale later becomes unavailable", async () => {
+    vi.useFakeTimers();
+    let recovering = false;
+    const connectedScale: DeviceInfo = { id: "bookoo-themis", name: "BooKoo Themis", type: "scale", state: "connected", available: true };
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
+      devices: [connectedScale],
+      scanDevicesResult: ({ connect }) =>
+        recovering && !connect ? [{ ...connectedScale, state: "discovered" }] : [connectedScale]
+    });
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    recovering = true;
+    fetchState.setDevices([{ ...connectedScale, state: "disconnected", available: false }]);
+
+    await act(async () => vi.advanceTimersByTimeAsync(30_300));
+
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/connect",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "bookoo-themis" }) })

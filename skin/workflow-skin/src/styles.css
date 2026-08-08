@@ -836,6 +836,7 @@ button {
   display: block;
   width: 100%;
   max-height: 280px;
+  overflow: hidden;
 }
 
 .shot-graph-loading {

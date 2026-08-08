@@ -174,6 +174,11 @@ export function ShotGraph({ measurements }: { measurements: ShotSnapshot[] }) {
 
   return (
     <svg className="shot-graph" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Shot pressure graph">
+      <defs>
+        <clipPath id="shot-graph-plot-clip">
+          <rect x={plot.x} y={plot.y} width={plot.width} height={plot.height} rx="4" />
+        </clipPath>
+      </defs>
       <rect width={width} height={height} rx="8" fill="#0d141a" />
       {series.length ? (
         <>
@@ -200,19 +205,21 @@ export function ShotGraph({ measurements }: { measurements: ShotSnapshot[] }) {
               </g>
             );
           })}
-          {series.map((item) => (
-            <path
-              key={item.key}
-              className={`shot-graph-series ${item.key}`}
-              d={pathForSeries(item, maxTime, maxY, plot)}
-              fill="none"
-              stroke={item.color}
-              strokeWidth={item.dashArray ? 1.8 : 3}
-              strokeLinecap={item.dashArray ? "butt" : "round"}
-              strokeLinejoin="round"
-              strokeDasharray={item.dashArray}
-            />
-          ))}
+          <g className="shot-graph-series-clip" clipPath="url(#shot-graph-plot-clip)">
+            {series.map((item) => (
+              <path
+                key={item.key}
+                className={`shot-graph-series ${item.key}`}
+                d={pathForSeries(item, maxTime, maxY, plot)}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={item.dashArray ? 1.8 : 3}
+                strokeLinecap={item.dashArray ? "butt" : "round"}
+                strokeLinejoin="round"
+                strokeDasharray={item.dashArray}
+              />
+            ))}
+          </g>
           <g className="shot-graph-legend">
             {series.map((item, index) => {
               const column = index % 4;

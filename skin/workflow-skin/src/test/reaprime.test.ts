@@ -42,6 +42,33 @@ describe("ReaPrimeApi", () => {
     expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
   });
 
+  it("wraps native gateway settings and scale timer controls", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init = {}) => {
+      const url = new URL(String(input));
+      return Promise.resolve(
+        url.pathname === "/api/v1/settings" && (init.method ?? "GET") === "GET"
+          ? new Response(JSON.stringify({ gatewayMode: "full" }), { status: 200 })
+          : new Response("", { status: 200 })
+      );
+    });
+    const api = new ReaPrimeApi("http://machine:8080");
+
+    await expect(api.getSettings()).resolves.toEqual({ gatewayMode: "full" });
+    await expect(api.updateSettings({ gatewayMode: "tracking" })).resolves.toBeUndefined();
+    await expect(api.resetScaleTimer()).resolves.toBeUndefined();
+    await expect(api.startScaleTimer()).resolves.toBeUndefined();
+    await expect(api.stopScaleTimer()).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/settings", expect.objectContaining({ method: "GET" }));
+    expect(fetch).toHaveBeenCalledWith(
+      "http://machine:8080/api/v1/settings",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ gatewayMode: "tracking" }) })
+    );
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/scale/timer/reset", expect.objectContaining({ method: "PUT" }));
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/scale/timer/start", expect.objectContaining({ method: "PUT" }));
+    expect(fetch).toHaveBeenCalledWith("http://machine:8080/api/v1/scale/timer/stop", expect.objectContaining({ method: "PUT" }));
+  });
+
   it("updates profiles through the ReaPrime profiles API", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ id: "p1", profile: { title: "Bloom v2", author: "Roy" } }), { status: 200 })

@@ -102,6 +102,7 @@ import {
 } from "./state/communityStorage";
 import { useLiveTelemetry } from "./state/useLiveTelemetry";
 import { useReaData } from "./state/useReaData";
+import { useScaleShotFallback } from "./state/useScaleShotFallback";
 
 declare global {
   var __WORKFLOW_SKIN_ENABLE_TEST_LOGS__: boolean | undefined;
@@ -119,6 +120,7 @@ const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
 const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
+const COMPLETED_SHOT_RETRY_DELAYS_MS: readonly number[] = [0, 150, 450, 900, 1500, 2500, 4000];
 const WATER_REFILL_POPUP_DELAY_MS = 10_000;
 const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1000];
 const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 350, 1000, 2000, 4000];
@@ -355,7 +357,7 @@ function hasConnectedScale(devices: DeviceInfo[]): boolean {
 }
 
 function disconnectedScaleDevices(devices: DeviceInfo[]): DeviceInfo[] {
-  return devices.filter((device) => isAvailableDevice(device) && isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
+  return devices.filter((device) => isScaleDeviceCandidate(device) && !isConnectedDevice(device) && !isR2Device(device));
 }
 
 function deviceIdSignature(devices: DeviceInfo[]): string {
@@ -510,6 +512,12 @@ function shotWithFallbackMeasurements(shot: ShotRecord, fallbackMeasurements: Sh
   return { ...shot, measurements: fallbackMeasurements };
 }
 
+function pendingPersistenceStartShotId(shot: ShotRecord | null): string | null | undefined {
+  if (!shot?.id.startsWith("workflow-pending-")) return undefined;
+  const value = shot.metadata?.workflowSkinPendingStartShotId;
+  return typeof value === "string" || value === null ? value : undefined;
+}
+
 async function loadCompletedShot(
   api: ReaPrimeApi,
   completed: CompletedActivityCapture,
@@ -524,7 +532,16 @@ async function loadCompletedShot(
     const latestShot = await api.getLatestShot().catch(() => null);
     return latestShot?.id === completed.shotId ? latestShot : null;
   }
-  return api.getLatestShot().catch(() => fallbackLatestShot);
+  if (completed.startLatestShotId === undefined) {
+    return api.getLatestShot().catch(() => fallbackLatestShot);
+  }
+  const startingShotId = completed.startLatestShotId;
+  for (const delay of COMPLETED_SHOT_RETRY_DELAYS_MS) {
+    if (delay > 0) await waitForNativeUpdate(delay);
+    const latestShot = await api.getLatestShot().catch(() => null);
+    if (latestShot && latestShot.id !== startingShotId) return latestShot;
+  }
+  return null;
 }
 
 function mergeReviewShot(cachedShot: ShotRecord | null, refreshedShot: ShotRecord | undefined): ShotRecord | null {
@@ -769,6 +786,7 @@ export function App() {
   const [waterRefillVisible, setWaterRefillVisible] = useState(false);
   const [completedReviewShot, setCompletedReviewShot] = useState<ShotRecord | null>(null);
   const [completedReviewLoading, setCompletedReviewLoading] = useState(false);
+  const [nativeGatewayMode, setNativeGatewayMode] = useState<string | null | undefined>(undefined);
   const [communityRecommendations, setCommunityRecommendations] = useState<CommunityRecommendation[]>([]);
   const [communityError, setCommunityError] = useState<string | null>(null);
   const [communityLoading, setCommunityLoading] = useState(false);
@@ -815,6 +833,8 @@ export function App() {
     lastAttemptAt: 0,
     pending: false
   });
+  const gatewayModeCheckRef = useRef(false);
+  const gatewayModeUpdateRef = useRef(false);
   const api = useMemo(() => new ReaPrimeApi(), []);
   const data = useReaData(api);
   const communityApi = useMemo(() => new CommunityApi(data.settings.communityApiBaseUrl), [data.settings.communityApiBaseUrl]);
@@ -895,6 +915,22 @@ export function App() {
       : isFinishedShotLifecycle(liveTelemetry.shotLifecycle))
   );
   const brewingCoffee = isBrewingMode(currentMachineMode) || sequencedBrewActive;
+  const currentMachineSubstate = fastMachineState?.state?.substate ?? liveTelemetry.machineMode?.substate ?? data.machineState?.state?.substate;
+  const scaleConnectedForShot =
+    liveTelemetry.scaleConnected ||
+    hasConnectedScale(nativeDevices) ||
+    data.machineState?.scaleConnected === true ||
+    data.machineState?.scale?.connected === true;
+  const scaleShotFallbackActive = useScaleShotFallback({
+    api,
+    brewing: brewingCoffee,
+    machineSubstate: currentMachineSubstate,
+    nativeSequencerActive: sequencedBrewActive,
+    forceFallback: nativeGatewayMode === "full",
+    scaleConnected: scaleConnectedForShot,
+    scaleSnapshot: liveTelemetry.scaleSnapshot,
+    targetYield: positiveNumber(data.workflow.context?.targetYield)
+  });
   const waterRefillAlertSuppressed = brewingCoffee || drinkWorkflowBusy;
   const holdingCompletedBrewOnLivePage = page === "live" && !brewingCoffee && completedActivityRef.current?.activity === "brew";
   const workflowLiveVisible = Boolean(drinkWorkflowRun.workflow && drinkWorkflowBusy);
@@ -1397,6 +1433,38 @@ export function App() {
   }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
+    if (!data.loaded || gatewayModeCheckRef.current) return;
+    gatewayModeCheckRef.current = true;
+    void api
+      .getSettings()
+      .then((settings) => setNativeGatewayMode(settings.gatewayMode ?? null))
+      .catch(() => setNativeGatewayMode(null));
+  }, [api, data.loaded]);
+
+  useEffect(() => {
+    if (nativeGatewayMode !== "full" || gatewayModeUpdateRef.current || !isIdleMode(currentMachineMode)) return;
+    gatewayModeUpdateRef.current = true;
+    void api
+      .updateSettings({ gatewayMode: "tracking" })
+      .then(() => {
+        setNativeGatewayMode("tracking");
+        skinLog("gateway_mode_restored_for_scale_control", { previousMode: "full", mode: "tracking" });
+      })
+      .catch((error) => {
+        skinLog("gateway_mode_restore_failed", { error: errorMessage(error) });
+      });
+  }, [api, currentMachineMode, nativeGatewayMode]);
+
+  useEffect(() => {
+    if (scaleShotFallbackActive) {
+      skinLog("scale_shot_fallback_active", {
+        gatewayMode: nativeGatewayMode ?? null,
+        machineSubstate: currentMachineSubstate ?? null
+      });
+    }
+  }, [currentMachineSubstate, nativeGatewayMode, scaleShotFallbackActive]);
+
+  useEffect(() => {
     if (!data.loaded || page === "screensaver") return;
 
     const request = data.settings.keepScreenAwake !== false ? api.requestWakeLock() : api.releaseWakeLock();
@@ -1491,17 +1559,21 @@ export function App() {
         if (completed.activity === "brew") {
           const latestCompletedShot = await loadCompletedShot(api, completed, latestShot);
           if (!latestCompletedShot || (completed.startLatestShotId !== undefined && latestCompletedShot.id === completed.startLatestShotId)) {
-            if (completed.shotId) {
+            if (completed.shotId || liveTelemetry.measurements.length > 0) {
+              const pendingShotId = completed.shotId ?? `workflow-pending-${Date.now()}`;
               const pendingShot: ShotRecord = {
-                id: completed.shotId,
+                id: pendingShotId,
                 timestamp: new Date().toISOString(),
                 workflow: data.workflow,
-                measurements: liveTelemetry.measurements
+                measurements: liveTelemetry.measurements,
+                ...(completed.shotId
+                  ? {}
+                  : { metadata: { workflowSkinPendingStartShotId: completed.startLatestShotId ?? latestShot?.id ?? null } })
               };
               setCompletedReviewShot(pendingShot);
               setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
               ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-              skinLog("brew_completed_pending_persistence", { shotId: completed.shotId });
+              skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId });
               setPage("review");
               return;
             }
@@ -1540,6 +1612,15 @@ export function App() {
     },
     [api, data.profiles, data.refresh, data.workflow, latestShot, liveTelemetry.measurements, r2Available]
   );
+
+  useEffect(() => {
+    const startingShotId = pendingPersistenceStartShotId(completedReviewShot);
+    if (startingShotId === undefined || !latestShot || latestShot.id === startingShotId) return;
+    const persistedShot = shotWithFallbackMeasurements(latestShot, completedReviewShot?.measurements ?? liveTelemetry.measurements);
+    setCompletedReviewShot(persistedShot);
+    setLastCompletedProfileId(selectedProfileIdFromWorkflow(persistedShot.workflow, data.profiles));
+    skinLog("brew_pending_persistence_resolved", { shotId: persistedShot.id });
+  }, [completedReviewShot, data.profiles, latestShot, liveTelemetry.measurements]);
 
   useEffect(() => {
     if (!data.loaded) return;

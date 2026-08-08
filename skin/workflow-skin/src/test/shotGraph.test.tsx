@@ -81,4 +81,23 @@ describe("ShotGraph", () => {
     expect(getByTextContent("23s")).toBeInTheDocument();
     expect(queryByTextContent("32.6s")).not.toBeInTheDocument();
   });
+
+  it("clips negative scale flow and every series to the plot frame", () => {
+    const measurements: ShotSnapshot[] = [
+      {
+        machine: { timestamp: "2026-06-18T10:00:00.000Z", pressure: 1, state: { state: "espresso", substate: "preinfusion" } },
+        scale: { timestamp: "2026-06-18T10:00:00.000Z", weightFlow: -12 }
+      },
+      {
+        machine: { timestamp: "2026-06-18T10:00:20.000Z", pressure: 8, state: { state: "espresso", substate: "pouring" } },
+        scale: { timestamp: "2026-06-18T10:00:20.000Z", weightFlow: 1.4 }
+      }
+    ];
+
+    const { container } = render(<ShotGraph measurements={measurements} />);
+
+    expect(container.querySelector("clipPath#shot-graph-plot-clip rect")).toBeInTheDocument();
+    expect(container.querySelector(".shot-graph-series-clip")).toHaveAttribute("clip-path", "url(#shot-graph-plot-clip)");
+    expect(container.querySelector("path.weightFlow")?.getAttribute("d")).toContain("370.0");
+  });
 });
