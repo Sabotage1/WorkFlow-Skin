@@ -105,4 +105,25 @@ describe("useLiveTelemetry", () => {
     });
     expect(result.current.scaleConnected).toBe(false);
   });
+
+  it("does not reset healthy live streams when the optional shot lifecycle socket is unavailable", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
+    const machineSocket = FakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/snapshot"));
+    const shotSocket = FakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/shotState"));
+
+    act(() => {
+      machineSocket?.emit("open", new Event("open"));
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: { state: "espresso", substate: "pouring" } }) })
+      );
+      shotSocket?.emit("close", new Event("close"));
+      vi.advanceTimersByTime(1001);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(result.current.machineStreamConnected).toBe(true);
+    expect(result.current.machineMode).toEqual({ state: "espresso", substate: "pouring" });
+  });
 });

@@ -662,14 +662,16 @@ function buildTopStatusIndicators({
   statuses,
   indicatorIds,
   machineState,
-  liveMeasurements
+  liveMeasurements,
+  ignoreLiveMachine = false
 }: {
   statuses: ConnectivityStatus[];
   indicatorIds: TopStatusIndicatorId[];
   machineState: MachineState | null;
   liveMeasurements: ShotSnapshot[];
+  ignoreLiveMachine?: boolean;
 }): TopStatusIndicator[] {
-  const liveMachine = latestMachineSnapshot(liveMeasurements);
+  const liveMachine = ignoreLiveMachine ? undefined : latestMachineSnapshot(liveMeasurements);
   const statusById = new Map(statuses.map((status) => [status.id, status]));
   const all: Record<TopStatusIndicatorId, TopStatusIndicator | null> = {
     machine: statusById.get("machine") ?? null,
@@ -935,10 +937,20 @@ export function App() {
   const waterLow = waterRefillRequired(machineStateForWater, liveTelemetry.waterLevels);
   const waterLowDetail = waterRefillMessage(machineStateForWater, liveTelemetry.waterLevels);
   const machineSleeping = isSleepingMode(currentMachineMode) || isSleepingMachine(data.machineState);
-  const sequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
+  const rawSequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
   const finishedShotLifecycle = isFinishedShotLifecycle(liveTelemetry.shotLifecycle)
     ? liveTelemetry.shotLifecycle
     : liveTelemetry.latestFinishedShotLifecycle;
+  const handledShotLifecycleId = lastHandledShotLifecycleIdRef.current;
+  const sequencedBrewActive = Boolean(
+    rawSequencedBrewActive &&
+    (!liveTelemetry.shotLifecycle?.shotId || liveTelemetry.shotLifecycle.shotId !== handledShotLifecycleId)
+  );
+  const handledShotLifecycleSettling = Boolean(
+    handledShotLifecycleId &&
+    finishedShotLifecycle?.shotId === handledShotLifecycleId &&
+    (!rawSequencedBrewActive || liveTelemetry.shotLifecycle?.shotId === handledShotLifecycleId)
+  );
   const sequencedBrewFinished = Boolean(
     finishedShotLifecycle &&
     isFinishedShotLifecycle(finishedShotLifecycle) &&
@@ -946,7 +958,7 @@ export function App() {
       ? finishedShotLifecycle.shotId !== lastHandledShotLifecycleIdRef.current
       : isFinishedShotLifecycle(liveTelemetry.shotLifecycle))
   );
-  const brewingCoffee = isBrewingMode(currentMachineMode) || sequencedBrewActive;
+  const brewingCoffee = sequencedBrewActive || (isBrewingMode(currentMachineMode) && !handledShotLifecycleSettling);
   const currentMachineSubstate = resolvedMachineMode.substate;
   const scaleConnectedForShot = liveTelemetry.scaleVerificationActive
     ? liveTelemetry.scaleConnected
@@ -997,12 +1009,13 @@ export function App() {
         statuses,
         indicatorIds: topStatusIndicatorIdsForSettings(data.settings),
         machineState: machineStateForStatus,
-        liveMeasurements: liveTelemetry.measurements
+        liveMeasurements: liveTelemetry.measurements,
+        ignoreLiveMachine: handledShotLifecycleSettling
       }),
-    [statuses, data.settings.topStatusIndicatorIds, machineStateForStatus, liveTelemetry.measurements]
+    [statuses, data.settings.topStatusIndicatorIds, machineStateForStatus, liveTelemetry.measurements, handledShotLifecycleSettling]
   );
-  const topMachineStatus = machineModeLabel(machineStateForStatus, topLiveMachine);
-  const topMachineTemperature = machineTemperature(machineStateForStatus, topLiveMachine);
+  const topMachineStatus = machineModeLabel(machineStateForStatus, handledShotLifecycleSettling ? undefined : topLiveMachine);
+  const topMachineTemperature = machineTemperature(machineStateForStatus, handledShotLifecycleSettling ? undefined : topLiveMachine);
   const topMachineSummary = `${topMachineStatus}${topMachineTemperature === null ? "" : ` · ${topMachineTemperature.toFixed(1)}°C`}`;
 
   const refreshCommunity = useCallback(async () => {
@@ -1816,7 +1829,11 @@ export function App() {
 
     const completedByShotLifecycle = completedActivityRef.current?.activity === "brew" && sequencedBrewFinished;
     const modeActivity = workflowActivityForMode(currentMachineMode);
-    const activeActivity = sequencedBrewActive ? "brew" : sequencedBrewFinished && modeActivity === "brew" ? null : modeActivity;
+    const activeActivity = sequencedBrewActive
+      ? "brew"
+      : (sequencedBrewFinished || handledShotLifecycleSettling) && modeActivity === "brew"
+        ? null
+        : modeActivity;
     if (activeActivity) {
       if (completedActivityRoutingRef.current) return;
       if (Date.now() < ignoreActiveActivityUntilAtRef.current) return;
@@ -1860,6 +1877,7 @@ export function App() {
     latestShot?.id,
     liveTelemetry.shotLifecycle,
     finishedShotLifecycle,
+    handledShotLifecycleSettling,
     routeCompletedActivity,
     selectedProfileId,
     sequencedBrewActive,

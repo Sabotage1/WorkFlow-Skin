@@ -22,6 +22,34 @@ type DeviceScanContext = {
 };
 type DeviceScanRequest = { path: string; quick: boolean; connect: boolean };
 type DeviceConnectContext = { machineState: MachineState; deviceId: string; scanCount: number; connectCount: number };
+type WebSocketListener = (event: Event | MessageEvent) => void;
+
+class AppFakeWebSocket {
+  static instances: AppFakeWebSocket[] = [];
+
+  readonly url: string;
+  private listeners = new Map<string, WebSocketListener[]>();
+
+  constructor(url: string) {
+    this.url = url;
+    AppFakeWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: WebSocketListener) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  close() {
+    this.emit("close", new Event("close"));
+  }
+
+  emit(type: string, event: Event | MessageEvent) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+const originalUserAgent = navigator.userAgent;
+const originalWebSocket = globalThis.WebSocket;
 
 const communityRecommendation: CommunityRecommendation = {
   id: "rec-12345678",
@@ -597,6 +625,8 @@ describe("App shell", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     localStorage.clear();
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: originalUserAgent });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: originalWebSocket });
   });
 
   it("starts on the brew page and switches navigation tabs", async () => {
@@ -1732,6 +1762,98 @@ describe("App shell", () => {
     expect(screen.queryByRole("heading", { name: "Live Brew" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
     expect(screen.queryByText("Steam Workflow")).not.toBeInTheDocument();
+  });
+
+  it("keeps Review stable when stale pouring state alternates with idle after the shot", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow lifecycle integration test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const completedShot: ShotRecord = {
+      id: "completed-oscillation-shot",
+      timestamp: "2026-08-11T12:00:00.000Z",
+      workflow: { profile: profiles[0].profile, context: { targetYield: 36 } },
+      measurements: [
+        { machine: { timestamp: "2026-08-11T12:00:00.000Z", pressure: 2 }, scale: { weight: 0 } },
+        { machine: { timestamp: "2026-08-11T12:00:25.000Z", pressure: 8 }, scale: { weight: 36 } }
+      ]
+    };
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle" } },
+      shots: []
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    const machineSocket = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/snapshot"));
+    const shotSocket = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/shotState"));
+    expect(machineSocket).toBeDefined();
+    expect(shotSocket).toBeDefined();
+
+    act(() => {
+      machineSocket?.emit("open", new Event("open"));
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: { state: "espresso", substate: "pouring" } }) })
+      );
+      shotSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: "pouring", shotId: completedShot.id }) })
+      );
+    });
+    expect(await screen.findByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+
+    fetchState.setShots([completedShot]);
+    act(() => {
+      shotSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: "finished", shotId: completedShot.id }) })
+      );
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: { state: "idle", substate: "idle" } }) })
+      );
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument());
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      act(() => {
+        shotSocket?.emit(
+          "message",
+          new MessageEvent("message", { data: JSON.stringify({ state: "pouring", shotId: completedShot.id }) })
+        );
+        machineSocket?.emit(
+          "message",
+          new MessageEvent("message", { data: JSON.stringify({ state: { state: "espresso", substate: "pouring" } }) })
+        );
+      });
+      expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Live Brew" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Idle");
+
+      act(() => {
+        shotSocket?.emit(
+          "message",
+          new MessageEvent("message", { data: JSON.stringify({ state: "finished", shotId: completedShot.id }) })
+        );
+        machineSocket?.emit(
+          "message",
+          new MessageEvent("message", { data: JSON.stringify({ state: { state: "idle", substate: "idle" } }) })
+        );
+      });
+      expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+    }
+
+    act(() => {
+      shotSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: "pouring", shotId: "next-shot" }) })
+      );
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: { state: "espresso", substate: "pouring" } }) })
+      );
+    });
+    expect(await screen.findByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
   });
 
   it("reviews the completed latest shot with the captured live graph after brew returns idle", async () => {

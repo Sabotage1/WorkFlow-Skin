@@ -150,14 +150,14 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     const connect = (
       path: string,
       onMessage: (data: unknown) => void,
-      handlers: { onOpen?: () => void; onClose?: () => void } = {}
+      handlers: { onOpen?: () => void; onClose?: () => void; reconnectOnClose?: boolean } = {}
     ) => {
       const socket = new WebSocket(`${baseUrl}${path}`);
       socket.addEventListener("open", () => handlers.onOpen?.());
       socket.addEventListener("message", (event) => onMessage(parseJson(event.data)));
       socket.addEventListener("close", () => {
         handlers.onClose?.();
-        scheduleReconnect();
+        if (handlers.reconnectOnClose !== false) scheduleReconnect();
       });
       socket.addEventListener("error", () => socket.close());
       sockets.push(socket);
@@ -242,6 +242,11 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       if (lifecycle.scaleConnected === false) setScaleConnected(false);
       setShotLifecycle(lifecycle);
       setLatestFinishedShotLifecycle((current) => retainLatestFinishedShotLifecycle(current, lifecycle));
+    }, {
+      onClose: () => setShotLifecycle(null),
+      // Older Decaid builds do not expose this optional endpoint. Its failure
+      // must not tear down the healthy machine, scale, and water streams.
+      reconnectOnClose: false
     });
 
     return () => {
