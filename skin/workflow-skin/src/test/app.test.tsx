@@ -603,6 +603,8 @@ describe("App shell", () => {
     mockReaFetch(initialSettings);
     render(<App />);
     expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(screen.getByText("Loading presets…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Light" })).not.toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Light Blooming" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Bags/i }));
@@ -2816,7 +2818,8 @@ describe("App shell", () => {
       {
         sensors: [detectedR2Sensor],
         devices: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "disconnected" }],
-        scanDevicesResult: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }]
+        scanDevicesResult: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered" }],
+        connectDeviceUpdatesState: false
       }
     );
     render(<App />);

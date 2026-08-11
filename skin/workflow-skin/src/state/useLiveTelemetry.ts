@@ -84,6 +84,7 @@ function isBrewingState(value: string | undefined): boolean {
 }
 
 export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveTelemetryOptions = {}) {
+  const scaleVerificationActive = !isTestBrowser() && typeof WebSocket === "function";
   const [measurements, setMeasurements] = useState<ShotSnapshot[]>([]);
   const [scaleSnapshot, setScaleSnapshot] = useState<WeightSnapshot | null>(null);
   const [scaleConnected, setScaleConnected] = useState(false);
@@ -183,8 +184,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
 
     connect("/ws/v1/scale/snapshot", (data) => {
       if (isRecord(data) && typeof data.status === "string") {
-        const connected = data.status === "connected";
-        setScaleConnected((current) => (current === connected ? current : connected));
+        if (data.status === "disconnected") setScaleConnected(false);
         return;
       }
 
@@ -211,9 +211,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       }
       if (lifecycle.shotId && lifecycle.state !== "idle") activeShotIdRef.current = lifecycle.shotId;
       if (lifecycle.state === "idle") activeShotIdRef.current = null;
-      if (typeof lifecycle.scaleConnected === "boolean") {
-        setScaleConnected((current) => (current === lifecycle.scaleConnected ? current : lifecycle.scaleConnected!));
-      }
+      if (lifecycle.scaleConnected === false) setScaleConnected(false);
       setShotLifecycle(lifecycle);
       setLatestFinishedShotLifecycle((current) => retainLatestFinishedShotLifecycle(current, lifecycle));
     });
@@ -229,6 +227,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     measurements,
     scaleSnapshot,
     scaleConnected,
+    scaleVerificationActive,
     waterLevels,
     machineMode,
     machineStreamConnected,

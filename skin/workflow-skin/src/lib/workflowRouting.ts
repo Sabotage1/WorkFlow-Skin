@@ -27,6 +27,27 @@ export function selectedProfileIdFromWorkflow(workflow: Workflow | undefined, pr
   return profiles.find((profile) => profile.profile.title?.trim() === workflowTitle)?.id;
 }
 
+export function resolveDisplayedProfileId({
+  workflowProfileId,
+  startupProfileId,
+  startupApplyPending,
+  startupProfileHoldId,
+  manualProfileId
+}: {
+  workflowProfileId?: string;
+  startupProfileId?: string;
+  startupApplyPending: boolean;
+  startupProfileHoldId?: string | null;
+  manualProfileId?: string | null;
+}): string | undefined {
+  return (
+    manualProfileId ??
+    startupProfileHoldId ??
+    (startupApplyPending ? startupProfileId : undefined) ??
+    workflowProfileId
+  );
+}
+
 export function postBrewPageForProfile(profileId: string | undefined, settings: SkinSettings): PostShotPage {
   if (isReviewEnabled(settings, profileId)) return "review";
   if (isMilkProfile(settings, profileId)) return "steam";

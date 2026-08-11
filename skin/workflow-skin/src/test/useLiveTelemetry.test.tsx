@@ -77,4 +77,25 @@ describe("useLiveTelemetry", () => {
     expect(result.current.machineStreamConnected).toBe(true);
     expect(result.current.machineMode).toEqual({ state: "idle", substate: "idle" });
   });
+
+  it("only marks the scale live after an actual reading, not a stale connected status frame", () => {
+    const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
+    const scaleSocket = FakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/scale/snapshot"));
+    expect(result.current.scaleVerificationActive).toBe(true);
+
+    act(() => {
+      scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ status: "connected" }) }));
+    });
+    expect(result.current.scaleConnected).toBe(false);
+
+    act(() => {
+      scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ weight: 0, battery: 72 }) }));
+    });
+    expect(result.current.scaleConnected).toBe(true);
+
+    act(() => {
+      scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ status: "disconnected" }) }));
+    });
+    expect(result.current.scaleConnected).toBe(false);
+  });
 });

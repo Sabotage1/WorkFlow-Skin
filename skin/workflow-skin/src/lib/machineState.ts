@@ -52,8 +52,10 @@ export function machineModeLabel(machineState: MachineState | null, liveMachine:
   const substate = liveMachine?.state?.substate ?? machineState?.state?.substate;
   if (!state) return machineState?.connected === false ? "Disconnected" : "Idle";
   const stateLabel = machineStateLabel(state, substate, liveMachine ?? machineState ?? undefined);
-  if (!substate || compact(state) === "preparingforshot") return stateLabel;
-  return `${stateLabel} · ${titleCase(substate)}`;
+  if (stateLabel === "Heating" || !substate || compact(state) === "preparingforshot") return stateLabel;
+  const compactSubstate = compact(substate);
+  if (!compactSubstate || compactSubstate === "idle" || compactSubstate === compact(state)) return stateLabel;
+  return titleCase(substate);
 }
 
 export function machineTemperature(machineState: MachineState | null, liveMachine: ShotSnapshot["machine"] | undefined): number | null {

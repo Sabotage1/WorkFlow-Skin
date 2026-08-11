@@ -151,6 +151,46 @@ describe("buildConnectivityStatuses", () => {
     });
   });
 
+  it("requires a fresh scale reading after wake instead of trusting stale native connected state", () => {
+    const statuses = buildConnectivityStatuses({
+      apiHost: "192.168.1.88",
+      machineState: { connected: true, scaleConnected: true },
+      sensors: [scaleSensor],
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }],
+      scaleConnected: false,
+      requireLiveScaleConfirmation: true,
+      r2SensorId: undefined,
+      r2Sensor: null
+    });
+
+    expect(statuses.find((status) => status.id === "scale")).toEqual({
+      id: "scale",
+      label: "Scale",
+      detail: "Not connected",
+      connected: false
+    });
+  });
+
+  it("shows the scale connected once fresh scale telemetry arrives after wake", () => {
+    const statuses = buildConnectivityStatuses({
+      apiHost: "192.168.1.88",
+      machineState: { connected: true },
+      sensors: [],
+      devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected", available: true }],
+      scaleConnected: true,
+      requireLiveScaleConfirmation: true,
+      r2SensorId: undefined,
+      r2Sensor: null
+    });
+
+    expect(statuses.find((status) => status.id === "scale")).toEqual({
+      id: "scale",
+      label: "Scale",
+      detail: "Connected",
+      connected: true
+    });
+  });
+
   it("marks water red when it is at or below the refill level", () => {
     const statuses = buildConnectivityStatuses({
       apiHost: "192.168.1.88",

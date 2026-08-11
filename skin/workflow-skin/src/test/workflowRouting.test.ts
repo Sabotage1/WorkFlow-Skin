@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProfileRecord, ShotRecord } from "../api/types";
-import { postActivityPage, postShotPageForShot, selectedProfileIdFromWorkflow } from "../lib/workflowRouting";
+import { postActivityPage, postShotPageForShot, resolveDisplayedProfileId, selectedProfileIdFromWorkflow } from "../lib/workflowRouting";
 import { defaultSkinSettings } from "../state/skinSettings";
 
 const profiles: ProfileRecord[] = [
@@ -20,6 +20,27 @@ function shotWithProfile(profileId: string): ShotRecord {
 }
 
 describe("postShotPageForShot", () => {
+  it("holds the startup profile on screen while the saved workflow catches up", () => {
+    expect(
+      resolveDisplayedProfileId({
+        workflowProfileId: "espresso",
+        startupProfileId: "milk",
+        startupApplyPending: true
+      })
+    ).toBe("milk");
+  });
+
+  it("keeps an explicit manual profile ahead of startup recovery", () => {
+    expect(
+      resolveDisplayedProfileId({
+        workflowProfileId: "espresso",
+        startupProfileId: "milk",
+        startupApplyPending: true,
+        manualProfileId: "espresso"
+      })
+    ).toBe("espresso");
+  });
+
   it("ignores stale selected profile metadata when the workflow profile title points to another saved profile", () => {
     expect(
       selectedProfileIdFromWorkflow(

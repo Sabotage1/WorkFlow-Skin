@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useReaData } from "../state/useReaData";
 
@@ -56,6 +56,26 @@ describe("useReaData", () => {
     });
 
     expect(api.listProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes profiles and presets available before slow history data finishes loading", async () => {
+    const api = createApi();
+    let releaseBeans: (() => void) | undefined;
+    api.listProfiles.mockResolvedValue([{ id: "p1", profile: { title: "Blooming" } }]);
+    api.listBeans.mockImplementation(
+      () =>
+        new Promise<never[]>((resolve) => {
+          releaseBeans = () => resolve([]);
+        })
+    );
+
+    const { result } = renderHook(() => useReaData(api as never));
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.profiles).toEqual([{ id: "p1", profile: { title: "Blooming" } }]);
+    expect(api.listBeans).toHaveBeenCalledTimes(1);
+
+    await act(async () => releaseBeans?.());
   });
 
   it("keeps machine data available without a visible error when shot history fails", async () => {

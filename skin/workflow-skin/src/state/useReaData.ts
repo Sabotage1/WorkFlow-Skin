@@ -90,6 +90,85 @@ export function useReaData(api: ReaPrimeApi) {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const refreshConnectivity = useCallback(async () => {
+    const [sensorList, deviceList, info, state, display] = await Promise.all([
+      api.listSensors().catch(() => [] as SensorListItem[]),
+      api.listDevices().catch(() => [] as DeviceInfo[]),
+      api.getAppInfo().catch(() => null as AppInfo | null),
+      api.getMachineState().catch(() => null as MachineState | null),
+      api.getDisplay().catch(() => null as DisplayState | null)
+    ]);
+    setSensors(sensorList);
+    setDevices(deviceList);
+    setAppInfo(info);
+    setMachineState(state);
+    setDisplayState(display);
+  }, [api]);
+
+  const refreshWorkflow = useCallback(async () => {
+    const workflowData = await api.getWorkflow().catch(() => null);
+    if (workflowData) setWorkflow(workflowData);
+  }, [api]);
+
+  const refreshSupplemental = useCallback(async () => {
+    const [beanList, grinderList, shotResult, steamList, de1Settings, de1AdvancedSettings, de1Calibration, pluginList] =
+      await Promise.all([
+        api.listBeans(),
+        api.listGrinders(),
+        loadShots(api),
+        api.listSteams().catch(() => [] as SteamRecord[]),
+        api.getMachineSettings().catch(() => null as De1MachineSettings | null),
+        api.getAdvancedMachineSettings().catch(() => null as De1AdvancedMachineSettings | null),
+        api.getMachineCalibration().catch(() => null as De1MachineCalibration | null),
+        api.listPlugins().catch(() => [] as PluginManifest[])
+      ]);
+    const batchLists = await Promise.all(beanList.map((bean) => api.listBatches(bean.id)));
+    const visualizerPlugin = pluginList.find((plugin) => plugin.id === "visualizer.reaplugin");
+    const [pluginSettings, status, lastUpload, backSyncStatus, forwardSyncStatus] = visualizerPlugin
+      ? await Promise.all([
+          api.getPluginSettings<JsonMap>("visualizer.reaplugin").catch(() => null),
+          api.callPluginEndpoint<JsonMap>("visualizer.reaplugin", "status").catch(() => null),
+          api.callPluginEndpoint<JsonMap>("visualizer.reaplugin", "lastUpload").catch(() => null),
+          api.callPluginEndpoint<JsonMap>("visualizer.reaplugin", "backSyncStatus").catch(() => null),
+          api.callPluginEndpoint<JsonMap>("visualizer.reaplugin", "forwardSyncStatus").catch(() => null)
+        ])
+      : [null, null, null, null, null];
+    setBeans(beanList);
+    setBatches(batchLists.flat());
+    setGrinders(grinderList);
+    setShots(shotResult.items);
+    setSteams(steamList);
+    setMachineSettings(de1Settings);
+    setAdvancedMachineSettings(de1AdvancedSettings);
+    setMachineCalibration(de1Calibration);
+    setPlugins(pluginList);
+    setVisualizerSettings(pluginSettings);
+    setVisualizerStatus(visualizerPlugin ? { status, lastUpload, backSyncStatus, forwardSyncStatus } : null);
+    setError(shotResult.error);
+  }, [api]);
+
+  const refreshInitial = useCallback(async () => {
+    try {
+      const [profileList, workflowData, savedSettings] = await Promise.all([
+        api.listProfiles(),
+        api.getWorkflow(),
+        loadSkinSettings(api),
+        refreshConnectivity()
+      ]);
+      setProfiles(profileList);
+      setWorkflow(workflowData);
+      setSettings(savedSettings);
+      setError(null);
+      setLoaded(true);
+      void refreshSupplemental().catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setLoaded(true);
+    }
+  }, [api, refreshConnectivity, refreshSupplemental]);
+
   const refresh = useCallback(async () => {
     try {
       const [
@@ -166,8 +245,8 @@ export function useReaData(api: ReaPrimeApi) {
   }, [api]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refreshInitial();
+  }, [refreshInitial]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -221,6 +300,8 @@ export function useReaData(api: ReaPrimeApi) {
     error,
     loaded,
     refresh,
+    refreshConnectivity,
+    refreshWorkflow,
     setWorkflow: setWorkflowData,
     persistSettings
   };

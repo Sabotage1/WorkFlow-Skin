@@ -601,6 +601,22 @@ button {
   grid-column: 1 / -1;
 }
 
+.brew-startup-loading {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--skin-muted);
+  text-align: center;
+}
+
+.brew-startup-loading strong {
+  color: var(--skin-text);
+  font-size: 20px;
+}
+
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

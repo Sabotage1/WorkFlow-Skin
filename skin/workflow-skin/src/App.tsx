@@ -72,7 +72,7 @@ import {
 } from "./lib/machineMode";
 import { isActiveShotLifecycle, isFinishedShotLifecycle } from "./lib/shotLifecycle";
 import { grindSizeFromShot, shotStats } from "./lib/shotStats";
-import { selectedProfileIdFromWorkflow, type CompletedWorkflowActivity } from "./lib/workflowRouting";
+import { resolveDisplayedProfileId, selectedProfileIdFromWorkflow, type CompletedWorkflowActivity } from "./lib/workflowRouting";
 import { BagsPage } from "./pages/BagsPage";
 import { BrewPage } from "./pages/BrewPage";
 import { CommunityPage, type UploadDraft } from "./pages/CommunityPage";
@@ -855,6 +855,8 @@ export function App() {
   const data = useReaData(api);
   const communityApi = useMemo(() => new CommunityApi(data.settings.communityApiBaseUrl), [data.settings.communityApiBaseUrl]);
   const liveTelemetry = useLiveTelemetry(undefined, { streamScale: page === "live" });
+  const scaleLiveConnectedRef = useRef(liveTelemetry.scaleConnected);
+  scaleLiveConnectedRef.current = liveTelemetry.scaleConnected;
   const latestShot = data.shots[0] ?? null;
   const nativeDevices = data.devices ?? [];
   const detectedR2Sensor = findDifluidR2Sensor(data.sensors);
@@ -866,9 +868,17 @@ export function App() {
   const r2DeviceConnected = Boolean(connectedR2Device && r2Sensor);
   const r2Available = Boolean(r2Sensor || data.settings.r2SensorId || connectedR2Device);
   const workflowSelectedProfileId = selectedProfileIdFromWorkflow(data.workflow, data.profiles);
-  const selectedProfileId = startupProfileHoldId ?? workflowSelectedProfileId;
-  const heldStartupProfile = startupProfileHoldId ? data.profiles.find((profile) => profile.id === startupProfileHoldId) : undefined;
-  const displayWorkflow = heldStartupProfile ? workflowForSelectedProfile(data.workflow, heldStartupProfile) : data.workflow;
+  const selectedProfileId = resolveDisplayedProfileId({
+    workflowProfileId: workflowSelectedProfileId,
+    startupProfileId: data.settings.startupProfileId,
+    startupApplyPending: data.loaded && !startupProfileApplyRef.current.complete,
+    startupProfileHoldId,
+    manualProfileId: manualProfileSelectionRef.current.profileId
+  });
+  const displayedProfile = selectedProfileId ? data.profiles.find((profile) => profile.id === selectedProfileId) : undefined;
+  const displayWorkflow = displayedProfile && selectedProfileId !== workflowSelectedProfileId
+    ? workflowForSelectedProfile(data.workflow, displayedProfile)
+    : data.workflow;
   const workflowPageProfileId = selectedProfileId ?? (page === "steam" || page === "review" ? lastCompletedProfileId : undefined);
   const activeProfile = data.profiles.find((profile) => profile.id === workflowPageProfileId);
   const refreshedCompletedReviewShot = completedReviewShot ? data.shots.find((shot) => shot.id === completedReviewShot.id) : undefined;
@@ -938,11 +948,12 @@ export function App() {
   );
   const brewingCoffee = isBrewingMode(currentMachineMode) || sequencedBrewActive;
   const currentMachineSubstate = resolvedMachineMode.substate;
-  const scaleConnectedForShot =
-    liveTelemetry.scaleConnected ||
-    hasConnectedScale(nativeDevices) ||
-    data.machineState?.scaleConnected === true ||
-    data.machineState?.scale?.connected === true;
+  const scaleConnectedForShot = liveTelemetry.scaleVerificationActive
+    ? liveTelemetry.scaleConnected
+    : liveTelemetry.scaleConnected ||
+      hasConnectedScale(nativeDevices) ||
+      data.machineState?.scaleConnected === true ||
+      data.machineState?.scale?.connected === true;
   const scaleShotFallbackActive = useScaleShotFallback({
     api,
     brewing: brewingCoffee,
@@ -967,12 +978,13 @@ export function App() {
         sensors: data.sensors,
         devices: nativeDevices,
         scaleConnected: liveTelemetry.scaleConnected,
+        requireLiveScaleConfirmation: liveTelemetry.scaleVerificationActive,
         waterLevels: liveTelemetry.waterLevels,
         r2SensorId: data.settings.r2SensorId,
         r2Sensor,
         r2Connected: r2DeviceConnected
       }),
-    [nativeDevices, machineStateForStatus, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
+    [nativeDevices, machineStateForStatus, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
   );
   const visibleMenuIds = useMemo(
     () => visibleMainMenuItems(data.settings).filter((itemId) => itemId !== "live" || brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible),
@@ -1335,22 +1347,23 @@ export function App() {
         });
         const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
         const devices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
+        const knownScales = devices.filter((item) => isScaleDeviceCandidate(item) && !isR2Device(item));
+        const requiresFreshScale = liveTelemetry.scaleVerificationActive && !scaleLiveConnectedRef.current;
 
         // Startup lets ReaPrime's connection policy take first choice. Wake
         // recovery is discovery-only and explicitly connects the remembered
         // Scale and R2 after the scan has fully released the native BLE guard.
         const disconnectedMachines = devices.filter((item) => !isConnectedDevice(item) && isMachineDeviceCandidate(item));
-        const disconnectedScales = devices.filter(
-          (item) => !isConnectedDevice(item) && isScaleDeviceCandidate(item) && !isR2Device(item)
-        );
+        const disconnectedScales = knownScales.filter((item) => !isConnectedDevice(item));
         const preferredScaleId = options.preferredScaleId ?? nativePreferredScaleId;
+        const eligibleScales = requiresFreshScale ? knownScales : disconnectedScales;
         const preferredScales = preferredScaleId
-          ? disconnectedScales.filter((item) => item.id === preferredScaleId)
+          ? eligibleScales.filter((item) => item.id === preferredScaleId)
           : [];
         const scaleCandidates = preferredScales.length > 0
           ? preferredScales
-          : disconnectedScales.length === 1
-            ? disconnectedScales
+          : eligibleScales.length === 1
+            ? eligibleScales
             : [];
         const disconnectedR2 = devices.filter(
           (item) =>
@@ -1369,8 +1382,10 @@ export function App() {
         }
 
         const refreshedDevices = await api.listDevices().catch(() => devices);
-        const scaleConfigured = Boolean(preferredScaleId) || devices.some((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
-        const scaleReady = !scaleConfigured || hasConnectedScale(refreshedDevices);
+        const scaleConfigured = Boolean(preferredScaleId) || knownScales.length > 0;
+        const scaleReady =
+          !scaleConfigured ||
+          (requiresFreshScale ? scaleLiveConnectedRef.current : hasConnectedScale(refreshedDevices));
         const r2Ready =
           !data.settings.r2SensorId ||
           refreshedDevices.some(
@@ -1383,7 +1398,7 @@ export function App() {
       });
       if (ready) break;
     }
-  }, [api, data.devices, data.settings.r2SensorId, enqueueDeviceConnection, nativePreferredScaleId]);
+  }, [api, data.devices, data.settings.r2SensorId, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive, nativePreferredScaleId]);
 
   const runStartupRecovery = useCallback(
     (options: { resetStartupProfile?: boolean; manualSelectionVersion?: number; recoverDevices?: boolean } = {}) => {
@@ -1392,21 +1407,21 @@ export function App() {
 
       let recovery: Promise<void>;
       recovery = (async () => {
-        await data.refresh();
+        await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
         await connectConfiguredStartupDevices();
-        await data.refresh();
+        await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
         if (options.resetStartupProfile !== false && manualProfileSelectionRef.current.version === manualSelectionVersion) {
           resetStartupProfileApply();
         }
         if (options.recoverDevices) {
           window.setTimeout(() => {
             void connectConfiguredStartupDevices({ recovery: true })
-              .then(() => data.refresh())
+              .then(() => data.refreshConnectivity())
               .catch(() => undefined);
           }, 500);
         }
         window.setTimeout(() => {
-          void data.refresh();
+          void data.refreshConnectivity();
         }, 1500);
       })().finally(() => {
         if (startupRecoveryRef.current === recovery) startupRecoveryRef.current = null;
@@ -1415,7 +1430,7 @@ export function App() {
       startupRecoveryRef.current = recovery;
       return recovery;
     },
-    [connectConfiguredStartupDevices, data.refresh, resetStartupProfileApply]
+    [connectConfiguredStartupDevices, data.refreshConnectivity, data.refreshWorkflow, resetStartupProfileApply]
   );
 
   const recoverDevicesAfterForeground = useCallback(() => {
@@ -1431,7 +1446,7 @@ export function App() {
     recovery = (async () => {
       const foregroundMachineState = await api.getMachineState().catch(() => null);
       if (foregroundMachineState) setFastMachineState(foregroundMachineState);
-      await data.refresh();
+      await data.refreshConnectivity();
 
       const nativeSettings = await api.getSettings().catch(() => null);
       const preferredScaleId = nativeSettings?.preferredScaleId ?? nativePreferredScaleId ?? null;
@@ -1458,7 +1473,9 @@ export function App() {
           api.listDevices().catch(() => data.devices ?? []),
           api.listSensors().catch(() => data.sensors)
         ]);
-        const scaleReady = !scaleRecoveryWanted || hasConnectedScale(devices);
+        const scaleReady =
+          !scaleRecoveryWanted ||
+          (liveTelemetry.scaleVerificationActive ? scaleLiveConnectedRef.current : hasConnectedScale(devices));
         const r2Ready =
           !configuredR2Id ||
           (Boolean(findDifluidR2Sensor(sensors)) &&
@@ -1469,7 +1486,7 @@ export function App() {
                 (isConfiguredR2Device(device, configuredR2Id) || isR2Device(device))
             ));
         if (scaleReady && r2Ready) {
-          await data.refresh();
+          await data.refreshConnectivity();
           return;
         }
 
@@ -1478,7 +1495,7 @@ export function App() {
           preferredScaleId,
           singleAttempt: true
         });
-        await data.refresh();
+        await data.refreshConnectivity();
       }
     })().finally(() => {
       if (foregroundDeviceRecoveryRef.current === recovery) foregroundDeviceRecoveryRef.current = null;
@@ -1486,7 +1503,7 @@ export function App() {
 
     foregroundDeviceRecoveryRef.current = recovery;
     return recovery;
-  }, [api, connectConfiguredStartupDevices, data.devices, data.machineState, data.refresh, data.sensors, data.settings.r2SensorId, liveTelemetry.reconnect, nativePreferredScaleId]);
+  }, [api, connectConfiguredStartupDevices, data.devices, data.machineState, data.refreshConnectivity, data.sensors, data.settings.r2SensorId, liveTelemetry.reconnect, liveTelemetry.scaleVerificationActive, nativePreferredScaleId]);
 
   useEffect(() => {
     const startupProfileId = data.settings.startupProfileId;
@@ -2201,7 +2218,7 @@ export function App() {
           });
 
         if (r2Devices.length === 0) {
-          await data.refresh();
+          await data.refreshConnectivity();
           if (discovery.firstError) throw discovery.firstError;
           skinLog("r2_manual_scan_not_found", { configuredDeviceId: data.settings.r2SensorId });
           setStatus({ type: "error", message: "No available DiFluid R2 was found. Keep it awake and tap R2 again." });
@@ -2240,14 +2257,14 @@ export function App() {
 
             const sensorId = connectedSensor.id;
             await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
-            await data.refresh();
+            await data.refreshConnectivity();
             skinLog("r2_manual_connect_confirmed", { deviceId: sensorId, forced: options.forceConfiguredConnect === true });
             setStatus({ type: "success", message: "R2 connected." });
             return;
           }
         }
 
-        await data.refresh();
+        await data.refreshConnectivity();
         if (firstConnectError) {
           throw firstConnectError;
         }
@@ -2353,10 +2370,13 @@ export function App() {
     options: { discoveryAttempts?: number; onDiscoveryRetry?: (attempt: number) => void; forceDiscovery?: boolean } = {}
   ) => {
     return enqueueDeviceConnection(async () => {
+      const scaleReady = (devices: DeviceInfo[]) =>
+        hasConnectedScale(devices) &&
+        (!liveTelemetry.scaleVerificationActive || scaleLiveConnectedRef.current);
       await wakeMachineIfNeeded(api, data.machineState);
       const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
-      if (hasConnectedScale(initialDevices)) {
-        await data.refresh();
+      if (scaleReady(initialDevices)) {
+        await data.refreshConnectivity();
         return { connected: true, requested: false, found: true, firstError: null };
       }
 
@@ -2370,8 +2390,8 @@ export function App() {
           const listedDevices = await api.listDevices().catch(() => scannedDevices);
           refreshedDevices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
           requested = true;
-          if (hasConnectedScale(refreshedDevices)) {
-            await data.refresh();
+          if (scaleReady(refreshedDevices)) {
+            await data.refreshConnectivity();
             skinLog("scale_managed_connect_confirmed", { appVersion: data.appInfo?.version ?? null });
             return { connected: true, requested, found: true, firstError };
           }
@@ -2394,12 +2414,12 @@ export function App() {
         scaleDevices = refreshedDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
       }
 
-      if (hasConnectedScale(refreshedDevices)) {
-        await data.refresh();
+      if (scaleReady(refreshedDevices)) {
+        await data.refreshConnectivity();
         return { connected: true, requested, found: true, firstError };
       }
 
-      for (const device of scaleDevices.filter((item) => !isConnectedDevice(item))) {
+      for (const device of scaleDevices.filter((item) => !isConnectedDevice(item) || !scaleLiveConnectedRef.current)) {
         try {
           await api.connectDevice(device.id);
           requested = true;
@@ -2412,23 +2432,23 @@ export function App() {
         for (const delay of DEVICE_CONNECTION_VERIFY_DELAYS_MS) {
           if (delay > 0) await waitForNativeUpdate(delay);
           refreshedDevices = (await api.listDevices().catch(() => refreshedDevices)).filter(isAvailableDevice);
-          if (!hasConnectedScale(refreshedDevices)) continue;
+          if (!scaleReady(refreshedDevices)) continue;
 
-          await data.refresh();
+          await data.refreshConnectivity();
           skinLog("scale_manual_connect_confirmed", { deviceId: device.id });
           return { connected: true, requested, found: true, firstError };
         }
       }
 
-      await data.refresh();
+      await data.refreshConnectivity();
       return {
-        connected: hasConnectedScale(refreshedDevices),
+        connected: scaleReady(refreshedDevices),
         requested,
         found: scaleDevices.length > 0,
         firstError
       };
     });
-  }, [api, data.appInfo?.version, data.devices, data.machineState, data.refresh, enqueueDeviceConnection]);
+  }, [api, data.appInfo?.version, data.devices, data.machineState, data.refreshConnectivity, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive]);
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -2448,12 +2468,17 @@ export function App() {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
     if (!isIdleMode(currentMachineMode)) return;
     const disconnectedScales = disconnectedScaleDevices(nativeDevices);
-    if (disconnectedScales.length === 0 || hasConnectedScale(nativeDevices)) {
+    const knownScales = nativeDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
+    const missingFreshScale =
+      liveTelemetry.scaleVerificationActive &&
+      !liveTelemetry.scaleConnected &&
+      knownScales.length > 0;
+    if (!missingFreshScale && (disconnectedScales.length === 0 || hasConnectedScale(nativeDevices))) {
       scaleReconnectRef.current.signature = null;
       return;
     }
 
-    const signature = deviceIdSignature(disconnectedScales);
+    const signature = deviceIdSignature(disconnectedScales.length > 0 ? disconnectedScales : knownScales);
     const now = Date.now();
     const reconnectState = scaleReconnectRef.current;
     if (reconnectState.pending) return;
@@ -2467,7 +2492,7 @@ export function App() {
       .finally(() => {
         scaleReconnectRef.current.pending = false;
       });
-  }, [currentMachineMode, data.loaded, machineSleeping, nativeDevices, page, requestScaleConnection]);
+  }, [currentMachineMode, data.loaded, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, machineSleeping, nativeDevices, page, requestScaleConnection]);
 
   const saveBag = async (bag: Bag) => {
     const bean = await api.createBean({
@@ -2840,7 +2865,7 @@ export function App() {
     setStatus({ type: "success", message: "Taring scale." });
     try {
       await api.tareScale();
-      await data.refresh();
+      await data.refreshConnectivity();
       setStatus({ type: "success", message: "Scale tared." });
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
@@ -2852,7 +2877,7 @@ export function App() {
         });
         if (result.connected) {
           await api.tareScale();
-          await data.refresh();
+          await data.refreshConnectivity();
           setStatus({ type: "success", message: "Scale connected and tared." });
           return;
         }
@@ -3018,7 +3043,13 @@ export function App() {
             {status.message}
           </p>
         )}
-        {page === "brew" && (
+        {page === "brew" && !data.loaded && (
+          <div className="panel wide brew-startup-loading" role="status" aria-live="polite">
+            <strong>Loading presets…</strong>
+            <span>Connecting to your saved workflow.</span>
+          </div>
+        )}
+        {page === "brew" && data.loaded && (
           <BrewPage
             workflow={displayWorkflow}
             profiles={data.profiles}

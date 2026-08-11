@@ -117,7 +117,7 @@ function scaleConnectedFromMachineState(machineState: MachineState | null): bool
 }
 
 function scaleConnectedFromDevices(devices: DeviceInfo[] | undefined): boolean {
-  return Boolean(devices?.some((device) => isScaleDevice(device) && isConnectedDeviceState(device.state)));
+  return Boolean(devices?.some((device) => isScaleDevice(device) && device.available !== false && isConnectedDeviceState(device.state)));
 }
 
 function scaleExplicitlyDisconnectedFromDevices(devices: DeviceInfo[] | undefined): boolean {
@@ -180,6 +180,7 @@ export function buildConnectivityStatuses({
   sensors,
   devices,
   scaleConnected,
+  requireLiveScaleConfirmation = false,
   waterLevels,
   r2SensorId,
   r2Sensor,
@@ -191,6 +192,7 @@ export function buildConnectivityStatuses({
   sensors: SensorListItem[];
   devices?: DeviceInfo[];
   scaleConnected?: boolean;
+  requireLiveScaleConfirmation?: boolean;
   waterLevels?: WaterLevels | null;
   r2SensorId?: string;
   r2Sensor: SensorListItem | null;
@@ -202,11 +204,13 @@ export function buildConnectivityStatuses({
   const nativeDevicesAvailable = Array.isArray(devices);
   const scaleConnectedByDevice = scaleConnectedFromDevices(devices);
   const scaleExplicitlyDisconnected = !scaleConnectedByDevice && scaleExplicitlyDisconnectedFromDevices(devices);
-  const hasScale =
-    Boolean(scaleConnected) ||
-    scaleConnectedFromMachineState(machineState) ||
-    scaleConnectedByDevice ||
-    (!nativeDevicesAvailable && !scaleExplicitlyDisconnected && sensors.some(isScaleSensor));
+  const hasScale = requireLiveScaleConfirmation
+    ? Boolean(scaleConnected) && !scaleExplicitlyDisconnected
+    : !scaleExplicitlyDisconnected &&
+      (Boolean(scaleConnected) ||
+        scaleConnectedFromMachineState(machineState) ||
+        scaleConnectedByDevice ||
+        (!nativeDevicesAvailable && sensors.some(isScaleSensor)));
 
   const statuses: ConnectivityStatus[] = [
     { id: "machine", label: "Machine", detail: machineConnected ? "Connected" : "Not connected", connected: machineConnected },
