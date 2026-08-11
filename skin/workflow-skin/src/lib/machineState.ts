@@ -9,6 +9,10 @@ function compact(value: string | undefined): string {
   return value?.replace(/[\s_-]/g, "").toLowerCase() ?? "";
 }
 
+function firstTemperature(...values: Array<number | undefined>): number | null {
+  return values.find((value) => typeof value === "number" && Number.isFinite(value) && value > 0) ?? null;
+}
+
 function titleCase(value: string): string {
   const spaced = value
     .replace(/_/g, " ")
@@ -21,14 +25,10 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-function isHeating(rawState: string | undefined, rawSubstate: string | undefined, telemetry?: MachineTelemetry): boolean {
+function isHeating(rawState: string | undefined, rawSubstate: string | undefined, _telemetry?: MachineTelemetry): boolean {
   const state = compact(rawState);
   const substate = compact(rawSubstate);
-  if (state.includes("heating") || state.includes("heatup") || substate.includes("heating") || substate.includes("heatup") || substate.includes("warm")) return true;
-
-  const current = telemetry?.groupTemperature ?? telemetry?.mixTemperature ?? telemetry?.steamTemperature;
-  const target = telemetry?.targetGroupTemperature ?? telemetry?.targetMixTemperature;
-  return typeof current === "number" && typeof target === "number" && target - current > 0.5;
+  return state.includes("heating") || state.includes("heatup") || substate.includes("heating") || substate.includes("heatup") || substate.includes("warm");
 }
 
 export function machineStateLabel(rawState: string | undefined, rawSubstate?: string, telemetry?: MachineTelemetry): string {
@@ -59,5 +59,25 @@ export function machineModeLabel(machineState: MachineState | null, liveMachine:
 }
 
 export function machineTemperature(machineState: MachineState | null, liveMachine: ShotSnapshot["machine"] | undefined): number | null {
-  return liveMachine?.groupTemperature ?? machineState?.groupTemperature ?? liveMachine?.mixTemperature ?? machineState?.mixTemperature ?? machineState?.steamTemperature ?? null;
+  const state = compact(liveMachine?.state?.state ?? machineState?.state?.state);
+  if (state === "idle" || state === "ready" || state === "schedidle") {
+    return firstTemperature(
+      liveMachine?.targetGroupTemperature,
+      machineState?.targetGroupTemperature,
+      liveMachine?.targetMixTemperature,
+      machineState?.targetMixTemperature,
+      liveMachine?.groupTemperature,
+      machineState?.groupTemperature,
+      liveMachine?.mixTemperature,
+      machineState?.mixTemperature,
+      machineState?.steamTemperature
+    );
+  }
+  return firstTemperature(
+    liveMachine?.groupTemperature,
+    machineState?.groupTemperature,
+    liveMachine?.mixTemperature,
+    machineState?.mixTemperature,
+    machineState?.steamTemperature
+  );
 }

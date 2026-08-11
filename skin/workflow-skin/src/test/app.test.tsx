@@ -664,6 +664,21 @@ describe("App shell", () => {
     expect(screen.queryByLabelText("App title")).not.toBeInTheDocument();
   });
 
+  it("shows the ready brew target instead of a cold head sensor after heating finishes", async () => {
+    mockReaFetch(initialSettings, {
+      machineState: {
+        connected: true,
+        state: { state: "idle", substate: "idle" },
+        groupTemperature: 64.9,
+        targetGroupTemperature: 93
+      }
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Idle · 93.0°C")).toBeInTheDocument();
+    expect(screen.queryByText(/Heating · 64\.9°C/)).not.toBeInTheDocument();
+  });
+
   it("refreshes a stale machine substate when the browser returns from sleep", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       machineState: { connected: true, state: { state: "idle", substate: "pouring" } }
@@ -1486,6 +1501,10 @@ describe("App shell", () => {
 
     await waitFor(() => expect(fetchState.scanCount).toBeGreaterThan(scansBeforeWake));
     await waitFor(() => expect(fetchState.workflowUpdateCount).toBeGreaterThan(1));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+    });
+    expect(fetchState.scanCount).toBe(scansBeforeWake + 1);
     expect(fetchState.workflow).toEqual(
       expect.objectContaining({
         context: expect.objectContaining({
@@ -2719,7 +2738,26 @@ describe("App shell", () => {
     ]);
   });
 
-  it("keeps scanning for R2 from the indicator after wake when the first post-wake scans miss it", async () => {
+  it("uses only one R2 scan when an indicator search finds no powered device", async () => {
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
+      { devices: [], sensors: [], scanDevicesResult: [] }
+    );
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    fetchState.fetchMock.mockClear();
+    const scansBeforePress = fetchState.scanCount;
+    await userEvent.click(await screen.findByRole("button", { name: "R2" }));
+
+    await waitFor(() => expect(fetchState.scanCount).toBe(scansBeforePress + 1));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+    });
+    expect(fetchState.scanCount).toBe(scansBeforePress + 1);
+  });
+
+  it("reserves BLE scan capacity by using one R2 scan from the indicator after wake", async () => {
     let poweredOn = false;
     let manualScanCount = 0;
     const r2Device: DeviceInfo = { id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "discovered", available: true };
@@ -2731,7 +2769,7 @@ describe("App shell", () => {
         scanDevicesResult: ({ connect, quickParam }) => {
           if (!poweredOn || connect || quickParam !== false) return [];
           manualScanCount += 1;
-          return manualScanCount >= 2 ? [r2Device] : [];
+          return manualScanCount === 1 ? [r2Device] : [];
         }
       }
     );
@@ -2753,7 +2791,7 @@ describe("App shell", () => {
     const scansBeforeIndicatorPress = fetchState.scanCount;
     await userEvent.click(await screen.findByRole("button", { name: "R2" }));
 
-    await waitFor(() => expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 2), { timeout: 5000 });
+    await waitFor(() => expect(fetchState.connectCount).toBeGreaterThan(0), { timeout: 5000 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
@@ -2770,8 +2808,9 @@ describe("App shell", () => {
       fetchState.fetchMock.mock.calls.filter(
         ([url]) => url === "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false"
       ).length
-    ).toBeGreaterThanOrEqual(2);
+    ).toBe(1);
     expect(fetchState.connectCount).toBeGreaterThan(0);
+    expect(fetchState.scanCount).toBe(scansBeforeIndicatorPress + 1);
   });
 
   it("ignores an unavailable remembered R2 and connects it after it is powered on", async () => {
@@ -3018,6 +3057,22 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
+  it("uses only one Scale scan when an indicator search finds no powered device", async () => {
+    const fetchState = mockReaFetch(initialSettings, { devices: [], sensors: [], scanDevicesResult: [] });
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    fetchState.fetchMock.mockClear();
+    const scansBeforePress = fetchState.scanCount;
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+
+    await waitFor(() => expect(fetchState.scanCount).toBe(scansBeforePress + 1));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+    });
+    expect(fetchState.scanCount).toBe(scansBeforePress + 1);
+  });
+
   it("recovers Scale and R2 after foreground wake when both were powered on after the skin loaded", async () => {
     let poweredOn = false;
     const scaleDevice: DeviceInfo = {
@@ -3076,7 +3131,7 @@ describe("App shell", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Connected"));
   });
 
-  it("keeps scanning for Scale from the indicator after wake when the first post-wake scans miss it", async () => {
+  it("reserves BLE scan capacity by using one Scale scan from the indicator after wake", async () => {
     let poweredOn = false;
     let manualScanCount = 0;
     const scaleDevice: DeviceInfo = { id: "scale-1", name: "Acaia Lunar", type: "scale", state: "discovered", available: true };
@@ -3087,7 +3142,7 @@ describe("App shell", () => {
         scanDevicesResult: ({ connect, quickParam }) => {
           if (!poweredOn || connect || quickParam !== false) return [];
           manualScanCount += 1;
-          return manualScanCount >= 2 ? [scaleDevice] : [];
+          return manualScanCount === 1 ? [scaleDevice] : [];
         }
       }
     );
@@ -3118,7 +3173,7 @@ describe("App shell", () => {
       },
       { timeout: 5000 }
     );
-    expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 2);
+    expect(fetchState.scanCount).toBe(scansBeforeIndicatorPress + 1);
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
@@ -3127,7 +3182,7 @@ describe("App shell", () => {
       fetchState.fetchMock.mock.calls.filter(
         ([url]) => url === "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false"
       )
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(fetchState.scaleTareCount).toBe(0);
   });
 

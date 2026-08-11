@@ -8,6 +8,8 @@ export interface LiveTelemetryOptions {
   streamScale?: boolean;
 }
 
+const SCALE_STATUS_READING_TIMEOUT_MS = 5000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -129,7 +131,13 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
 
     let disposed = false;
     let reconnectTimer: number | null = null;
+    let scaleStatusTimer: number | null = null;
     const sockets: WebSocket[] = [];
+    const clearScaleStatusTimer = () => {
+      if (scaleStatusTimer === null) return;
+      window.clearTimeout(scaleStatusTimer);
+      scaleStatusTimer = null;
+    };
     const scheduleReconnect = () => {
       if (disposed || reconnectTimer !== null) return;
       reconnectTimer = window.setTimeout(() => {
@@ -184,17 +192,37 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
 
     connect("/ws/v1/scale/snapshot", (data) => {
       if (isRecord(data) && typeof data.status === "string") {
-        if (data.status === "disconnected") setScaleConnected(false);
+        if (data.status === "connected") {
+          setScaleConnected(true);
+          clearScaleStatusTimer();
+          if (!lastScaleRef.current) {
+            scaleStatusTimer = window.setTimeout(() => {
+              scaleStatusTimer = null;
+              if (!lastScaleRef.current) setScaleConnected(false);
+            }, SCALE_STATUS_READING_TIMEOUT_MS);
+          }
+        } else if (data.status === "disconnected") {
+          clearScaleStatusTimer();
+          lastScaleRef.current = null;
+          setScaleConnected(false);
+        }
         return;
       }
 
       const scale = parseScaleSnapshot(data);
       if (!scale) return;
+      clearScaleStatusTimer();
       lastScaleRef.current = scale;
       setScaleConnected((current) => (current ? current : true));
       if (streamScaleRef.current || brewingRef.current) setScaleSnapshot(scale);
       if (brewingRef.current && lastMachineRef.current) {
         setMeasurements((current) => appendLiveMeasurement(current, { machine: lastMachineRef.current ?? undefined, scale }));
+      }
+    }, {
+      onClose: () => {
+        clearScaleStatusTimer();
+        lastScaleRef.current = null;
+        setScaleConnected(false);
       }
     });
 
@@ -219,6 +247,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     return () => {
       disposed = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      clearScaleStatusTimer();
       for (const socket of sockets) socket.close();
     };
   }, [baseUrl, connectionGeneration]);

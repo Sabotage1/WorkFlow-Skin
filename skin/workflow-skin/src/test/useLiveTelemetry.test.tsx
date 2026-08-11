@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLiveTelemetry } from "../state/useLiveTelemetry";
 
 type Listener = (event: Event | MessageEvent) => void;
@@ -39,6 +39,7 @@ describe("useLiveTelemetry", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     Object.defineProperty(navigator, "userAgent", { configurable: true, value: originalUserAgent });
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: originalWebSocket });
   });
@@ -78,7 +79,8 @@ describe("useLiveTelemetry", () => {
     expect(result.current.machineMode).toEqual({ state: "idle", substate: "idle" });
   });
 
-  it("only marks the scale live after an actual reading, not a stale connected status frame", () => {
+  it("accepts a fresh connected status while requiring a reading to keep it live", () => {
+    vi.useFakeTimers();
     const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
     const scaleSocket = FakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/scale/snapshot"));
     expect(result.current.scaleVerificationActive).toBe(true);
@@ -86,10 +88,15 @@ describe("useLiveTelemetry", () => {
     act(() => {
       scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ status: "connected" }) }));
     });
+    expect(result.current.scaleConnected).toBe(true);
+
+    act(() => vi.advanceTimersByTime(5001));
     expect(result.current.scaleConnected).toBe(false);
 
     act(() => {
+      scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ status: "connected" }) }));
       scaleSocket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ weight: 0, battery: 72 }) }));
+      vi.advanceTimersByTime(5001);
     });
     expect(result.current.scaleConnected).toBe(true);
 

@@ -130,12 +130,12 @@ const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
 const COMPLETED_SHOT_RETRY_DELAYS_MS: readonly number[] = [0, 150, 450, 900, 1500, 2500, 4000];
 const WATER_REFILL_POPUP_DELAY_MS = 10_000;
-const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0, 1500, 3500];
-const FOREGROUND_DEVICE_RECOVERY_DELAYS_MS: readonly number[] = [0, 3000, 5000, 7000, 15_000];
+const DEVICE_WAKE_RECOVERY_DELAYS_MS: readonly number[] = [0];
+const FOREGROUND_DEVICE_RECOVERY_DELAYS_MS: readonly number[] = [0];
 const FOREGROUND_DEVICE_RECOVERY_COOLDOWN_MS = 5000;
 const FOREGROUND_INTERACTION_IDLE_MS = 15_000;
 const DEVICE_CONNECTION_VERIFY_DELAYS_MS: readonly number[] = [0, 350, 1000, 2000, 4000];
-const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 3;
+const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 1;
 const DEVICE_DISCOVERY_RETRY_DELAY_MS = 750;
 const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
@@ -1408,18 +1408,12 @@ export function App() {
       let recovery: Promise<void>;
       recovery = (async () => {
         await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
-        await connectConfiguredStartupDevices();
+        await connectConfiguredStartupDevices({ recovery: options.recoverDevices === true });
         await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
         if (options.resetStartupProfile !== false && manualProfileSelectionRef.current.version === manualSelectionVersion) {
           resetStartupProfileApply();
         }
-        if (options.recoverDevices) {
-          window.setTimeout(() => {
-            void connectConfiguredStartupDevices({ recovery: true })
-              .then(() => data.refreshConnectivity())
-              .catch(() => undefined);
-          }, 500);
-        }
+        if (options.recoverDevices) foregroundDeviceRecoveryLastAtRef.current = Date.now();
         window.setTimeout(() => {
           void data.refreshConnectivity();
         }, 1500);
