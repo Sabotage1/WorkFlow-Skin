@@ -1,5 +1,32 @@
 export type WorkflowMachineActivity = "brew" | "steam";
 
+export interface MachineModeSnapshot {
+  state?: string;
+  substate?: string;
+}
+
+function normalizedSnapshot(snapshot: MachineModeSnapshot | null | undefined): MachineModeSnapshot | null {
+  if (!snapshot || (!snapshot.state && !snapshot.substate)) return null;
+  return {
+    ...(snapshot.state ? { state: snapshot.state } : {}),
+    ...(snapshot.substate ? { substate: snapshot.substate } : {})
+  };
+}
+
+export function resolveMachineModeSnapshot({
+  fast,
+  live,
+  liveConnected,
+  fallback
+}: {
+  fast?: MachineModeSnapshot | null;
+  live?: MachineModeSnapshot | null;
+  liveConnected: boolean;
+  fallback?: MachineModeSnapshot | null;
+}): MachineModeSnapshot {
+  return normalizedSnapshot(fast) ?? (liveConnected ? normalizedSnapshot(live) : null) ?? normalizedSnapshot(fallback) ?? {};
+}
+
 export function compactMachineMode(state: string | undefined): string {
   return state?.trim().toLowerCase().replace(/[^a-z]/g, "") ?? "";
 }

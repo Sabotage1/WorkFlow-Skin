@@ -662,6 +662,22 @@ describe("App shell", () => {
     expect(screen.queryByLabelText("App title")).not.toBeInTheDocument();
   });
 
+  it("refreshes a stale machine substate when the browser returns from sleep", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "idle", substate: "pouring" } }
+    });
+    render(<App />);
+
+    const topbar = await screen.findByRole("banner", { name: "Machine status bar" });
+    expect(topbar).toHaveTextContent("Pouring");
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(() => expect(topbar).not.toHaveTextContent("Pouring"));
+    expect(topbar).toHaveTextContent("Idle");
+  });
+
   it("does not show bulk shot history backend errors on the brew page", async () => {
     mockReaFetch(initialSettings, {
       machineState: { connected: true, state: { state: "idle" }, wifi: { connected: true, ipAddress: "192.168.1.20" } },
@@ -2751,8 +2767,8 @@ describe("App shell", () => {
     expect(
       fetchState.fetchMock.mock.calls.filter(
         ([url]) => url === "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false"
-      )
-    ).toHaveLength(2);
+      ).length
+    ).toBeGreaterThanOrEqual(2);
     expect(fetchState.connectCount).toBeGreaterThan(0);
   });
 
@@ -2997,6 +3013,64 @@ describe("App shell", () => {
       "/api/v1/devices/scan?connect=false&quick=false"
     ]);
     expect(fetchState.scaleTareCount).toBe(0);
+  });
+
+  it("recovers Scale and R2 after foreground wake when both were powered on after the skin loaded", async () => {
+    let poweredOn = false;
+    const scaleDevice: DeviceInfo = {
+      id: "scale-after-wake",
+      name: "Acaia Lunar",
+      type: "scale",
+      state: "discovered",
+      available: true
+    };
+    const r2Device: DeviceInfo = {
+      id: "F4:12:FA:FA:AC:E3",
+      name: "DiFluid R2",
+      type: "sensor",
+      state: "discovered",
+      available: true
+    };
+    const fetchState = mockReaFetch(
+      { ...initialSettings, r2SensorId: r2Device.id },
+      {
+        nativeSettings: { gatewayMode: "tracking", preferredScaleId: scaleDevice.id },
+        devices: [],
+        sensors: [],
+        sensorsAfterScan: [detectedR2Sensor],
+        scanDevicesResult: ({ connect, quickParam }) =>
+          poweredOn && !connect && quickParam === false ? [scaleDevice, r2Device] : []
+      }
+    );
+    render(<App />);
+
+    await waitFor(() => expect(fetchState.scanRequests.length).toBeGreaterThanOrEqual(1));
+    expect(await screen.findByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Not connected");
+    expect(screen.getByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Not connected");
+
+    poweredOn = true;
+    fetchState.fetchMock.mockClear();
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(
+      () => {
+        expect(fetchState.fetchMock).toHaveBeenCalledWith(
+          "http://localhost:8080/api/v1/devices/connect",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: scaleDevice.id }) })
+        );
+        expect(fetchState.fetchMock).toHaveBeenCalledWith(
+          "http://localhost:8080/api/v1/devices/connect",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: r2Device.id }) })
+        );
+      },
+      { timeout: 5000 }
+    );
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
+      expect.objectContaining({ method: "GET" })
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Connected"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "R2" })).toHaveAttribute("title", "R2: Connected"));
   });
 
   it("keeps scanning for Scale from the indicator after wake when the first post-wake scans miss it", async () => {

@@ -89,14 +89,20 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
   const [scaleConnected, setScaleConnected] = useState(false);
   const [waterLevels, setWaterLevels] = useState<WaterLevels | null>(null);
   const [machineMode, setMachineMode] = useState<{ state?: string; substate?: string } | null>(null);
+  const [machineStreamConnected, setMachineStreamConnected] = useState(false);
   const [shotLifecycle, setShotLifecycle] = useState<ShotLifecycle | null>(null);
   const [latestFinishedShotLifecycle, setLatestFinishedShotLifecycle] = useState<ShotLifecycle | null>(null);
+  const [connectionGeneration, setConnectionGeneration] = useState(0);
   const lastMachineRef = useRef<ShotSnapshot["machine"] | null>(null);
   const lastScaleRef = useRef<WeightSnapshot | null>(null);
   const streamScaleRef = useRef(options.streamScale ?? false);
   const brewingRef = useRef(false);
   const activeShotIdRef = useRef<string | null>(null);
   const getLatestScaleSnapshot = useCallback(() => lastScaleRef.current, []);
+  const reconnect = useCallback(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    setConnectionGeneration((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     streamScaleRef.current = options.streamScale ?? false;
@@ -104,13 +110,58 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
 
   useEffect(() => {
     if (isTestBrowser() || typeof WebSocket !== "function") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") reconnect();
+    };
+    window.addEventListener("focus", reconnect);
+    window.addEventListener("pageshow", reconnect);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", reconnect);
+      window.removeEventListener("pageshow", reconnect);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [reconnect]);
 
+  useEffect(() => {
+    if (isTestBrowser() || typeof WebSocket !== "function") return;
+
+    let disposed = false;
+    let reconnectTimer: number | null = null;
     const sockets: WebSocket[] = [];
-    const connect = (path: string, onMessage: (data: unknown) => void) => {
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (!disposed && document.visibilityState !== "hidden") {
+          setConnectionGeneration((current) => current + 1);
+        }
+      }, 1000);
+    };
+    const connect = (
+      path: string,
+      onMessage: (data: unknown) => void,
+      handlers: { onOpen?: () => void; onClose?: () => void } = {}
+    ) => {
       const socket = new WebSocket(`${baseUrl}${path}`);
+      socket.addEventListener("open", () => handlers.onOpen?.());
       socket.addEventListener("message", (event) => onMessage(parseJson(event.data)));
+      socket.addEventListener("close", () => {
+        handlers.onClose?.();
+        scheduleReconnect();
+      });
+      socket.addEventListener("error", () => socket.close());
       sockets.push(socket);
     };
+
+    lastMachineRef.current = null;
+    lastScaleRef.current = null;
+    brewingRef.current = false;
+    activeShotIdRef.current = null;
+    setMachineMode(null);
+    setMachineStreamConnected(false);
+    setScaleConnected(false);
+    setShotLifecycle(null);
 
     connect("/ws/v1/machine/snapshot", (data) => {
       const machine = parseMachineSnapshot(data);
@@ -125,6 +176,9 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       if (brewingRef.current) {
         setMeasurements((current) => appendLiveMeasurement(current, { machine, scale: lastScaleRef.current ?? undefined }, startsNewBrew));
       }
+    }, {
+      onOpen: () => setMachineStreamConnected(true),
+      onClose: () => setMachineStreamConnected(false)
     });
 
     connect("/ws/v1/scale/snapshot", (data) => {
@@ -165,9 +219,11 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     });
 
     return () => {
+      disposed = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       for (const socket of sockets) socket.close();
     };
-  }, [baseUrl]);
+  }, [baseUrl, connectionGeneration]);
 
   return {
     measurements,
@@ -175,8 +231,10 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     scaleConnected,
     waterLevels,
     machineMode,
+    machineStreamConnected,
     shotLifecycle,
     latestFinishedShotLifecycle,
-    getLatestScaleSnapshot
+    getLatestScaleSnapshot,
+    reconnect
   };
 }
