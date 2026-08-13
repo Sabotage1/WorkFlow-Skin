@@ -514,10 +514,6 @@ function autoSleepCheckIntervalMs(idleLimitMs: number): number {
   return Math.min(30_000, Math.max(1_000, Math.floor(idleLimitMs / 4)));
 }
 
-function latestMachineSnapshot(measurements: ShotSnapshot[]): ShotSnapshot["machine"] | undefined {
-  return measurements.length > 0 ? measurements[measurements.length - 1]?.machine : undefined;
-}
-
 function shotWithFallbackMeasurements(shot: ShotRecord, fallbackMeasurements: ShotSnapshot[]): ShotRecord {
   if ((shot.measurements?.length ?? 0) > 0 || fallbackMeasurements.length === 0) return shot;
   return { ...shot, measurements: fallbackMeasurements };
@@ -662,27 +658,28 @@ function buildTopStatusIndicators({
   statuses,
   indicatorIds,
   machineState,
-  liveMeasurements,
+  liveMachine,
   ignoreLiveMachine = false
 }: {
   statuses: ConnectivityStatus[];
   indicatorIds: TopStatusIndicatorId[];
   machineState: MachineState | null;
-  liveMeasurements: ShotSnapshot[];
+  liveMachine?: ShotSnapshot["machine"];
   ignoreLiveMachine?: boolean;
 }): TopStatusIndicator[] {
-  const liveMachine = ignoreLiveMachine ? undefined : latestMachineSnapshot(liveMeasurements);
+  const verifiedLiveMachine = ignoreLiveMachine ? undefined : liveMachine;
   const statusById = new Map(statuses.map((status) => [status.id, status]));
+  const machineConnected = Boolean(machineState && machineState.connected !== false);
   const all: Record<TopStatusIndicatorId, TopStatusIndicator | null> = {
     machine: statusById.get("machine") ?? null,
     wifi: statusById.get("wifi") ?? null,
     scale: statusById.get("scale") ?? null,
     water: statusById.get("water") ?? null,
     r2: statusById.get("r2") ?? null,
-    state: { id: "state", label: "State", detail: machineModeLabel(machineState, liveMachine), connected: machineState?.connected !== false },
-    temperature: { id: "temperature", label: "Temp", detail: formatTopNumber(machineTemperature(machineState, liveMachine), "°C"), connected: true },
-    pressure: { id: "pressure", label: "Bar", detail: formatTopNumber(liveMachine?.pressure ?? machineState?.pressure, " bar"), connected: true },
-    flow: { id: "flow", label: "Flow", detail: formatTopNumber(liveMachine?.flow ?? machineState?.flow, " g/s"), connected: true }
+    state: { id: "state", label: "State", detail: machineModeLabel(machineState, verifiedLiveMachine), connected: machineConnected },
+    temperature: { id: "temperature", label: "Temp", detail: formatTopNumber(machineTemperature(machineState, verifiedLiveMachine), "°C"), connected: machineConnected },
+    pressure: { id: "pressure", label: "Bar", detail: formatTopNumber(verifiedLiveMachine?.pressure ?? machineState?.pressure, " bar"), connected: machineConnected },
+    flow: { id: "flow", label: "Flow", detail: formatTopNumber(verifiedLiveMachine?.flow ?? machineState?.flow, " g/s"), connected: machineConnected }
   };
 
   return indicatorIds.map((id) => all[id]).filter((indicator): indicator is TopStatusIndicator => Boolean(indicator));
@@ -891,17 +888,20 @@ export function App() {
       : latestShot;
   const activeProfileWorkflow = profileWorkflowFor(data.settings, workflowPageProfileId);
   const visualizerPlugin = data.plugins?.find((plugin) => plugin.id === "visualizer.reaplugin") ?? null;
-  const topLiveMachine = latestMachineSnapshot(liveTelemetry.measurements);
+  const machineLiveConfirmed = !liveTelemetry.machineVerificationActive || liveTelemetry.machineStreamConnected;
+  const topLiveMachine = liveTelemetry.machineStreamConnected ? liveTelemetry.machineSnapshot ?? undefined : undefined;
   const liveMachineState = liveTelemetry.machineStreamConnected ? topLiveMachine?.state ?? liveTelemetry.machineMode : null;
   const resolvedMachineMode = resolveMachineModeSnapshot({
-    fast: fastMachineState?.state,
+    fast: machineLiveConfirmed ? fastMachineState?.state : null,
     live: liveMachineState,
     liveConnected: liveTelemetry.machineStreamConnected,
-    fallback: data.machineState?.state
+    fallback: machineLiveConfirmed ? data.machineState?.state : null
   });
-  const machineStateForStatus: MachineState | null = fastMachineState
-    ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
-    : data.machineState ?? (liveMachineState ? { connected: true, state: liveMachineState } : null);
+  const machineStateForStatus: MachineState | null = !machineLiveConfirmed
+    ? { connected: false }
+    : fastMachineState
+      ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
+      : data.machineState ?? (liveMachineState ? { connected: true, state: liveMachineState } : null);
   const shownProfiles = useMemo(
     () => data.profiles.filter((profile) => isProfileShown(data.settings, profile.id)),
     [data.profiles, data.settings.shownProfileIds]
@@ -925,18 +925,21 @@ export function App() {
     return data.settings.drinkWorkflows.filter((workflow) => !assignedWorkflowIds.has(workflow.id));
   }, [data.settings.drinkWorkflows, data.settings.presetSlots, editingSlotIndex]);
   const machineConnected = Boolean(machineStateForStatus && machineStateForStatus.connected !== false);
-  const machineStateForWater: MachineState | null = fastMachineState
-    ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
-    : data.machineState;
+  const machineStateForWater: MachineState | null = !machineLiveConfirmed
+    ? null
+    : fastMachineState
+      ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
+      : data.machineState;
   const currentMachineMode = resolvedMachineMode.state;
   const drinkWorkflowBusy =
     drinkWorkflowRun.phase === "preparing" ||
     drinkWorkflowRun.phase === "starting" ||
     drinkWorkflowRun.phase === "running" ||
     drinkWorkflowRun.phase === "between";
-  const waterLow = waterRefillRequired(machineStateForWater, liveTelemetry.waterLevels);
-  const waterLowDetail = waterRefillMessage(machineStateForWater, liveTelemetry.waterLevels);
-  const machineSleeping = isSleepingMode(currentMachineMode) || isSleepingMachine(data.machineState);
+  const verifiedWaterLevels = machineLiveConfirmed ? liveTelemetry.waterLevels : null;
+  const waterLow = waterRefillRequired(machineStateForWater, verifiedWaterLevels);
+  const waterLowDetail = waterRefillMessage(machineStateForWater, verifiedWaterLevels);
+  const machineSleeping = isSleepingMode(currentMachineMode);
   const rawSequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
   const finishedShotLifecycle = isFinishedShotLifecycle(liveTelemetry.shotLifecycle)
     ? liveTelemetry.shotLifecycle
@@ -991,12 +994,12 @@ export function App() {
         devices: nativeDevices,
         scaleConnected: liveTelemetry.scaleConnected,
         requireLiveScaleConfirmation: liveTelemetry.scaleVerificationActive,
-        waterLevels: liveTelemetry.waterLevels,
+        waterLevels: verifiedWaterLevels,
         r2SensorId: data.settings.r2SensorId,
         r2Sensor,
         r2Connected: r2DeviceConnected
       }),
-    [nativeDevices, machineStateForStatus, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, liveTelemetry.waterLevels, r2DeviceConnected, r2Sensor]
+    [nativeDevices, machineStateForStatus, verifiedWaterLevels, data.sensors, data.settings.r2SensorId, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, r2DeviceConnected, r2Sensor]
   );
   const visibleMenuIds = useMemo(
     () => visibleMainMenuItems(data.settings).filter((itemId) => itemId !== "live" || brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible),
@@ -1009,13 +1012,13 @@ export function App() {
         statuses,
         indicatorIds: topStatusIndicatorIdsForSettings(data.settings),
         machineState: machineStateForStatus,
-        liveMeasurements: liveTelemetry.measurements,
-        ignoreLiveMachine: handledShotLifecycleSettling
+        liveMachine: topLiveMachine,
+        ignoreLiveMachine: handledShotLifecycleSettling || !machineLiveConfirmed
       }),
-    [statuses, data.settings.topStatusIndicatorIds, machineStateForStatus, liveTelemetry.measurements, handledShotLifecycleSettling]
+    [statuses, data.settings.topStatusIndicatorIds, machineStateForStatus, topLiveMachine, handledShotLifecycleSettling, machineLiveConfirmed]
   );
-  const topMachineStatus = machineModeLabel(machineStateForStatus, handledShotLifecycleSettling ? undefined : topLiveMachine);
-  const topMachineTemperature = machineTemperature(machineStateForStatus, handledShotLifecycleSettling ? undefined : topLiveMachine);
+  const topMachineStatus = machineModeLabel(machineStateForStatus, handledShotLifecycleSettling || !machineLiveConfirmed ? undefined : topLiveMachine);
+  const topMachineTemperature = machineTemperature(machineStateForStatus, handledShotLifecycleSettling || !machineLiveConfirmed ? undefined : topLiveMachine);
   const topMachineSummary = `${topMachineStatus}${topMachineTemperature === null ? "" : ` · ${topMachineTemperature.toFixed(1)}°C`}`;
 
   const refreshCommunity = useCallback(async () => {

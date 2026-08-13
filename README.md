@@ -6,7 +6,7 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.3.7](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.7)
+- [WorkFlow Skin v0.3.8](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.8)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 

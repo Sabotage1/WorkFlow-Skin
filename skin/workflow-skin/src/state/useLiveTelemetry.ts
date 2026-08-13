@@ -9,6 +9,8 @@ export interface LiveTelemetryOptions {
 }
 
 const SCALE_STATUS_READING_TIMEOUT_MS = 5000;
+export const MACHINE_SNAPSHOT_STALE_TIMEOUT_MS = 3000;
+const MACHINE_SNAPSHOT_UI_INTERVAL_MS = 500;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -86,11 +88,14 @@ function isBrewingState(value: string | undefined): boolean {
 }
 
 export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveTelemetryOptions = {}) {
-  const scaleVerificationActive = !isTestBrowser() && typeof WebSocket === "function";
+  const liveVerificationActive = !isTestBrowser() && typeof WebSocket === "function";
+  const scaleVerificationActive = liveVerificationActive;
+  const machineVerificationActive = liveVerificationActive;
   const [measurements, setMeasurements] = useState<ShotSnapshot[]>([]);
   const [scaleSnapshot, setScaleSnapshot] = useState<WeightSnapshot | null>(null);
   const [scaleConnected, setScaleConnected] = useState(false);
   const [waterLevels, setWaterLevels] = useState<WaterLevels | null>(null);
+  const [machineSnapshot, setMachineSnapshot] = useState<ShotSnapshot["machine"] | null>(null);
   const [machineMode, setMachineMode] = useState<{ state?: string; substate?: string } | null>(null);
   const [machineStreamConnected, setMachineStreamConnected] = useState(false);
   const [shotLifecycle, setShotLifecycle] = useState<ShotLifecycle | null>(null);
@@ -132,6 +137,8 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     let disposed = false;
     let reconnectTimer: number | null = null;
     let scaleStatusTimer: number | null = null;
+    let machineSnapshotTimer: number | null = null;
+    let lastPublishedMachineSnapshotAt = 0;
     const sockets: WebSocket[] = [];
     const clearScaleStatusTimer = () => {
       if (scaleStatusTimer === null) return;
@@ -147,6 +154,11 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
         }
       }, 1000);
     };
+    const clearMachineSnapshotTimer = () => {
+      if (machineSnapshotTimer === null) return;
+      window.clearTimeout(machineSnapshotTimer);
+      machineSnapshotTimer = null;
+    };
     const connect = (
       path: string,
       onMessage: (data: unknown) => void,
@@ -161,6 +173,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       });
       socket.addEventListener("error", () => socket.close());
       sockets.push(socket);
+      return socket;
     };
 
     lastMachineRef.current = null;
@@ -168,13 +181,39 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     brewingRef.current = false;
     activeShotIdRef.current = null;
     setMachineMode(null);
+    setMachineSnapshot(null);
     setMachineStreamConnected(false);
     setScaleConnected(false);
     setShotLifecycle(null);
 
-    connect("/ws/v1/machine/snapshot", (data) => {
+    let machineSocket: WebSocket | null = null;
+    const markMachineStreamStale = () => {
+      clearMachineSnapshotTimer();
+      lastMachineRef.current = null;
+      brewingRef.current = false;
+      setMachineMode(null);
+      setMachineSnapshot(null);
+      setMachineStreamConnected(false);
+      machineSocket?.close();
+    };
+    const armMachineSnapshotTimer = () => {
+      clearMachineSnapshotTimer();
+      machineSnapshotTimer = window.setTimeout(markMachineStreamStale, MACHINE_SNAPSHOT_STALE_TIMEOUT_MS);
+    };
+
+    machineSocket = connect("/ws/v1/machine/snapshot", (data) => {
       const machine = parseMachineSnapshot(data);
       if (!machine) return;
+      armMachineSnapshotTimer();
+      setMachineStreamConnected(true);
+      const previousMachine = lastMachineRef.current;
+      const machineModeChanged =
+        previousMachine?.state?.state !== machine.state?.state || previousMachine?.state?.substate !== machine.state?.substate;
+      const now = Date.now();
+      if (machineModeChanged || now - lastPublishedMachineSnapshotAt >= MACHINE_SNAPSHOT_UI_INTERVAL_MS) {
+        lastPublishedMachineSnapshotAt = now;
+        setMachineSnapshot(machine);
+      }
       lastMachineRef.current = machine;
       const nextBrewing = isBrewingState(machine.state?.state);
       const startsNewBrew = nextBrewing && !brewingRef.current;
@@ -186,8 +225,17 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
         setMeasurements((current) => appendLiveMeasurement(current, { machine, scale: lastScaleRef.current ?? undefined }, startsNewBrew));
       }
     }, {
-      onOpen: () => setMachineStreamConnected(true),
-      onClose: () => setMachineStreamConnected(false)
+      // An open socket is not proof that the physical machine is still
+      // reporting. It becomes live only after the first current snapshot.
+      onOpen: armMachineSnapshotTimer,
+      onClose: () => {
+        clearMachineSnapshotTimer();
+        lastMachineRef.current = null;
+        brewingRef.current = false;
+        setMachineMode(null);
+        setMachineSnapshot(null);
+        setMachineStreamConnected(false);
+      }
     });
 
     connect("/ws/v1/scale/snapshot", (data) => {
@@ -252,6 +300,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     return () => {
       disposed = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      clearMachineSnapshotTimer();
       clearScaleStatusTimer();
       for (const socket of sockets) socket.close();
     };
@@ -262,7 +311,9 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     scaleSnapshot,
     scaleConnected,
     scaleVerificationActive,
+    machineVerificationActive,
     waterLevels,
+    machineSnapshot,
     machineMode,
     machineStreamConnected,
     shotLifecycle,

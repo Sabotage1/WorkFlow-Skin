@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useLiveTelemetry } from "../state/useLiveTelemetry";
+import { MACHINE_SNAPSHOT_STALE_TIMEOUT_MS, useLiveTelemetry } from "../state/useLiveTelemetry";
 
 type Listener = (event: Event | MessageEvent) => void;
 
@@ -125,5 +125,34 @@ describe("useLiveTelemetry", () => {
     expect(FakeWebSocket.instances).toHaveLength(4);
     expect(result.current.machineStreamConnected).toBe(true);
     expect(result.current.machineMode).toEqual({ state: "espresso", substate: "pouring" });
+  });
+
+  it("requires fresh machine snapshots and expires an open socket that stops reporting", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
+    const machineSocket = FakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/snapshot"));
+
+    act(() => machineSocket?.emit("open", new Event("open")));
+    expect(result.current.machineVerificationActive).toBe(true);
+    expect(result.current.machineStreamConnected).toBe(false);
+
+    act(() => {
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", { data: JSON.stringify({ state: { state: "espresso", substate: "pouring" } }) })
+      );
+    });
+    expect(result.current.machineStreamConnected).toBe(true);
+    expect(result.current.machineMode).toEqual({ state: "espresso", substate: "pouring" });
+
+    act(() => vi.advanceTimersByTime(MACHINE_SNAPSHOT_STALE_TIMEOUT_MS - 1));
+    expect(result.current.machineStreamConnected).toBe(true);
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current.machineStreamConnected).toBe(false);
+    expect(result.current.machineMode).toBeNull();
+
+    act(() => vi.advanceTimersByTime(1001));
+    expect(FakeWebSocket.instances).toHaveLength(8);
   });
 });

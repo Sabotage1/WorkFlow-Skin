@@ -725,6 +725,51 @@ describe("App shell", () => {
     expect(topbar).toHaveTextContent("Idle");
   });
 
+  it("does not present cached pouring or temperature data until the physical machine sends a fresh snapshot", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow machine freshness integration test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    mockReaFetch(initialSettings, {
+      machineState: {
+        connected: true,
+        state: { state: "espresso", substate: "pouring" },
+        groupTemperature: 87.8,
+        targetGroupTemperature: 93
+      }
+    });
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Light Blooming" });
+    const topbar = screen.getByRole("banner", { name: "Machine status bar" });
+    const machineSocket = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/ws/v1/machine/snapshot"));
+    expect(machineSocket).toBeDefined();
+
+    act(() => machineSocket?.emit("open", new Event("open")));
+    expect(topbar).toHaveTextContent("Disconnected");
+    expect(topbar).not.toHaveTextContent("Pouring");
+    expect(topbar).not.toHaveTextContent("87.8°C");
+    expect(within(topbar).getByRole("button", { name: "Machine" })).toHaveAttribute("title", "Machine: Not connected");
+    expect(within(topbar).getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Disconnected");
+    expect(within(topbar).getByRole("button", { name: "Temp" })).toHaveAttribute("title", "Temp: —");
+
+    act(() => {
+      machineSocket?.emit(
+        "message",
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            state: { state: "idle", substate: "idle" },
+            groupTemperature: 65,
+            targetGroupTemperature: 93
+          })
+        })
+      );
+    });
+    expect(topbar).toHaveTextContent("Idle · 93.0°C");
+    expect(within(topbar).getByRole("button", { name: "Machine" })).toHaveAttribute("title", "Machine: Connected");
+    expect(within(topbar).getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Idle");
+    expect(within(topbar).getByRole("button", { name: "Temp" })).toHaveAttribute("title", "Temp: 93.0°C");
+  });
+
   it("does not show bulk shot history backend errors on the brew page", async () => {
     mockReaFetch(initialSettings, {
       machineState: { connected: true, state: { state: "idle" }, wifi: { connected: true, ipAddress: "192.168.1.20" } },

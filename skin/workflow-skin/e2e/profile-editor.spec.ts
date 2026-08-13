@@ -16,6 +16,31 @@ async function routeProfileEditorApi(page: Page) {
     screensaverBrightness: 24
   };
 
+  await page.routeWebSocket("**/ws/v1/**", (socket) => {
+    let snapshotInterval: ReturnType<typeof setInterval> | undefined;
+    if (socket.url().endsWith("/ws/v1/machine/snapshot")) {
+      const sendSnapshot = () => {
+        socket.send(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            state: { state: "idle", substate: "idle" },
+            groupTemperature: 65,
+            targetGroupTemperature: 93
+          })
+        );
+      };
+      sendSnapshot();
+      snapshotInterval = setInterval(sendSnapshot, 250);
+    } else if (socket.url().endsWith("/ws/v1/scale/snapshot")) {
+      socket.send(JSON.stringify({ status: "disconnected" }));
+    } else if (socket.url().endsWith("/ws/v1/machine/waterLevels")) {
+      socket.send(JSON.stringify({ currentLevel: 40, refillLevel: 15 }));
+    }
+    socket.onClose(() => {
+      if (snapshotInterval) clearInterval(snapshotInterval);
+    });
+  });
+
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
