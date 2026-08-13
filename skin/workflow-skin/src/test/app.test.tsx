@@ -852,6 +852,26 @@ describe("App shell", () => {
     expect(topbar).not.toHaveTextContent("Preparing for shot");
   });
 
+  it("shows measured heat separately from the profile target for idle plus PreparingForShot", async () => {
+    mockReaFetch(initialSettings, {
+      machineState: {
+        connected: true,
+        state: { state: "idle", substate: "PreparingForShot" },
+        groupTemperature: 34.6,
+        mixTemperature: 31.2,
+        targetGroupTemperature: 88
+      }
+    });
+    render(<App />);
+
+    const topbar = await screen.findByRole("banner", { name: "Machine status bar" });
+
+    expect(topbar).toHaveTextContent("Heating · 34.6→88.0°C");
+    expect(topbar).not.toHaveTextContent("PreparingForShot");
+    expect(within(topbar).getByRole("button", { name: "State" })).toHaveAttribute("title", "State: Heating");
+    expect(within(topbar).getByRole("button", { name: "Temp" })).toHaveAttribute("title", "Temp: 34.6°C · Target 88.0°C");
+  });
+
   it("renders on older WebViews without Array.prototype.at", async () => {
     const originalAtDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "at");
     Object.defineProperty(Array.prototype, "at", { configurable: true, value: undefined });

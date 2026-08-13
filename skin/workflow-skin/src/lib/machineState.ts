@@ -28,7 +28,15 @@ function titleCase(value: string): string {
 function isHeating(rawState: string | undefined, rawSubstate: string | undefined, _telemetry?: MachineTelemetry): boolean {
   const state = compact(rawState);
   const substate = compact(rawSubstate);
-  return state.includes("heating") || state.includes("heatup") || substate.includes("heating") || substate.includes("heatup") || substate.includes("warm");
+  return (
+    state.includes("heating") ||
+    state.includes("heatup") ||
+    state.includes("preparingforshot") ||
+    substate.includes("heating") ||
+    substate.includes("heatup") ||
+    substate.includes("warm") ||
+    substate.includes("preparingforshot")
+  );
 }
 
 export function machineStateLabel(rawState: string | undefined, rawSubstate?: string, telemetry?: MachineTelemetry): string {
@@ -60,7 +68,8 @@ export function machineModeLabel(machineState: MachineState | null, liveMachine:
 
 export function machineTemperature(machineState: MachineState | null, liveMachine: ShotSnapshot["machine"] | undefined): number | null {
   const state = compact(liveMachine?.state?.state ?? machineState?.state?.state);
-  if (state === "idle" || state === "ready" || state === "schedidle") {
+  const substate = liveMachine?.state?.substate ?? machineState?.state?.substate;
+  if ((state === "idle" || state === "ready" || state === "schedidle") && !isHeating(state, substate)) {
     return firstTemperature(
       liveMachine?.targetGroupTemperature,
       machineState?.targetGroupTemperature,
@@ -79,5 +88,14 @@ export function machineTemperature(machineState: MachineState | null, liveMachin
     liveMachine?.mixTemperature,
     machineState?.mixTemperature,
     machineState?.steamTemperature
+  );
+}
+
+export function machineTargetTemperature(machineState: MachineState | null, liveMachine: ShotSnapshot["machine"] | undefined): number | null {
+  return firstTemperature(
+    liveMachine?.targetGroupTemperature,
+    machineState?.targetGroupTemperature,
+    liveMachine?.targetMixTemperature,
+    machineState?.targetMixTemperature
   );
 }

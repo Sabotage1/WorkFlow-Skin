@@ -60,7 +60,7 @@ import {
   type DrinkWorkflow,
   type DrinkWorkflowRunState
 } from "./lib/drinkWorkflows";
-import { machineModeLabel, machineTemperature } from "./lib/machineState";
+import { machineModeLabel, machineTargetTemperature, machineTemperature } from "./lib/machineState";
 import {
   isBrewingMode,
   isIdleMode,
@@ -654,6 +654,27 @@ function formatTopNumber(value: number | null | undefined, unit: string): string
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : "—";
 }
 
+function machineTemperatureDetail(
+  status: string,
+  temperature: number | null,
+  targetTemperature: number | null
+): string {
+  if (status === "Heating" && targetTemperature !== null) {
+    const current = temperature === null ? "—" : `${temperature.toFixed(1)}°C`;
+    return `${current} · Target ${targetTemperature.toFixed(1)}°C`;
+  }
+  return formatTopNumber(temperature, "°C");
+}
+
+function machineStatusSummary(status: string, temperature: number | null, targetTemperature: number | null): string {
+  if (status === "Heating" && targetTemperature !== null) {
+    return temperature === null
+      ? `${status} · Target ${targetTemperature.toFixed(1)}°C`
+      : `${status} · ${temperature.toFixed(1)}→${targetTemperature.toFixed(1)}°C`;
+  }
+  return `${status}${temperature === null ? "" : ` · ${temperature.toFixed(1)}°C`}`;
+}
+
 function buildTopStatusIndicators({
   statuses,
   indicatorIds,
@@ -670,14 +691,17 @@ function buildTopStatusIndicators({
   const verifiedLiveMachine = ignoreLiveMachine ? undefined : liveMachine;
   const statusById = new Map(statuses.map((status) => [status.id, status]));
   const machineConnected = Boolean(machineState && machineState.connected !== false);
+  const machineStatus = machineModeLabel(machineState, verifiedLiveMachine);
+  const temperature = machineTemperature(machineState, verifiedLiveMachine);
+  const targetTemperature = machineTargetTemperature(machineState, verifiedLiveMachine);
   const all: Record<TopStatusIndicatorId, TopStatusIndicator | null> = {
     machine: statusById.get("machine") ?? null,
     wifi: statusById.get("wifi") ?? null,
     scale: statusById.get("scale") ?? null,
     water: statusById.get("water") ?? null,
     r2: statusById.get("r2") ?? null,
-    state: { id: "state", label: "State", detail: machineModeLabel(machineState, verifiedLiveMachine), connected: machineConnected },
-    temperature: { id: "temperature", label: "Temp", detail: formatTopNumber(machineTemperature(machineState, verifiedLiveMachine), "°C"), connected: machineConnected },
+    state: { id: "state", label: "State", detail: machineStatus, connected: machineConnected },
+    temperature: { id: "temperature", label: "Temp", detail: machineTemperatureDetail(machineStatus, temperature, targetTemperature), connected: machineConnected },
     pressure: { id: "pressure", label: "Bar", detail: formatTopNumber(verifiedLiveMachine?.pressure ?? machineState?.pressure, " bar"), connected: machineConnected },
     flow: { id: "flow", label: "Flow", detail: formatTopNumber(verifiedLiveMachine?.flow ?? machineState?.flow, " g/s"), connected: machineConnected }
   };
@@ -1019,7 +1043,11 @@ export function App() {
   );
   const topMachineStatus = machineModeLabel(machineStateForStatus, handledShotLifecycleSettling || !machineLiveConfirmed ? undefined : topLiveMachine);
   const topMachineTemperature = machineTemperature(machineStateForStatus, handledShotLifecycleSettling || !machineLiveConfirmed ? undefined : topLiveMachine);
-  const topMachineSummary = `${topMachineStatus}${topMachineTemperature === null ? "" : ` · ${topMachineTemperature.toFixed(1)}°C`}`;
+  const topMachineTargetTemperature = machineTargetTemperature(
+    machineStateForStatus,
+    handledShotLifecycleSettling || !machineLiveConfirmed ? undefined : topLiveMachine
+  );
+  const topMachineSummary = machineStatusSummary(topMachineStatus, topMachineTemperature, topMachineTargetTemperature);
 
   const refreshCommunity = useCallback(async () => {
     setCommunityLoading(true);

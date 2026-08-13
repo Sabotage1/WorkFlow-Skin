@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { machineModeLabel, machineTemperature } from "../lib/machineState";
+import { machineModeLabel, machineTargetTemperature, machineTemperature } from "../lib/machineState";
 
 describe("machineModeLabel", () => {
   it("shows one heating status instead of combining it with shot preparation", () => {
@@ -40,5 +40,18 @@ describe("machineModeLabel", () => {
     };
 
     expect(machineTemperature(null, liveMachine)).toBe(92.2);
+  });
+
+  it("treats idle plus PreparingForShot as heating and does not present the target as the current temperature", () => {
+    const liveMachine = {
+      state: { state: "idle", substate: "PreparingForShot" },
+      groupTemperature: 34.6,
+      mixTemperature: 31.2,
+      targetGroupTemperature: 88
+    };
+
+    expect(machineModeLabel(null, liveMachine)).toBe("Heating");
+    expect(machineTemperature(null, liveMachine)).toBe(34.6);
+    expect(machineTargetTemperature(null, liveMachine)).toBe(88);
   });
 });
