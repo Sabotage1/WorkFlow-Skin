@@ -20,7 +20,13 @@ const screensaverPlacements = [
   { panelX: 4, panelY: 34, artPosition: "52% 84%" }
 ] as const;
 
-export function ScreensaverPage({ title, brightness = 8, onWake }: { title: string; brightness?: number; onWake: () => void }) {
+export function ScreensaverPage({ title, brightness = 8, sleepStatus = "unknown", onWake, onRetrySleep }: {
+  title: string;
+  brightness?: number;
+  sleepStatus?: "pending" | "confirmed" | "failed" | "unknown";
+  onWake: () => void;
+  onRetrySleep?: () => void;
+}) {
   const [artIndex, setArtIndex] = useState(() => Math.floor(Math.random() * screensaverArt.length));
   const art = screensaverArt[artIndex] ?? screensaverArt[0];
   const quote = screensaverQuotes[artIndex % screensaverQuotes.length] ?? screensaverQuotes[0];
@@ -55,15 +61,23 @@ export function ScreensaverPage({ title, brightness = 8, onWake }: { title: stri
       style={style}
       onClick={onWake}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onWake();
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) onWake();
       }}
       tabIndex={0}
     >
       <div className="screensaver-art" aria-hidden="true" style={artStyle} />
       <div className="screensaver-panel">
-        <span className="eyebrow">Machine sleeping</span>
+        <span className="eyebrow" role="status">{sleepStatus === "confirmed" ? "Machine sleeping" : sleepStatus === "pending" ? "Requesting machine sleep…" : "Sleep not confirmed"}</span>
         <h1>WorkFlow</h1>
         <p className="screensaver-subtitle">{quote}</p>
+        {(sleepStatus === "failed" || sleepStatus === "unknown") && (
+          <p>The screen is dimmed, but the machine has not confirmed sleep.</p>
+        )}
+        {(sleepStatus === "failed" || sleepStatus === "unknown") && onRetrySleep && (
+          <button type="button" className="ghost-button" onClick={(event) => { event.stopPropagation(); onRetrySleep(); }}>
+            Retry machine sleep
+          </button>
+        )}
         <button
           type="button"
           className="ghost-button"

@@ -312,6 +312,10 @@ export function useReaData(api: ReaPrimeApi) {
     [api]
   );
 
+  const cacheShot = useCallback((shot: ShotRecord) => {
+    setShots((current) => sortShotsNewestFirst([shot, ...current.filter((item) => item.id !== shot.id)]));
+  }, []);
+
   const setWorkflowData = useCallback((next: Workflow) => {
     setWorkflow(next);
   }, []);
@@ -344,6 +348,7 @@ export function useReaData(api: ReaPrimeApi) {
     refreshConnectivity,
     refreshWorkflow,
     setWorkflow: setWorkflowData,
+    cacheShot,
     persistSettings
   };
 }

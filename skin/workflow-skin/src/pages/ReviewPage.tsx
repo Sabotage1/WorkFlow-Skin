@@ -83,6 +83,7 @@ function preferShotForGraph(existing: ShotRecord | undefined, candidate: ShotRec
 
 export function ReviewPage({
   shot,
+  pending = false,
   previousShots,
   onSaveAnnotations,
   onUploadVisualizer,
@@ -99,6 +100,7 @@ export function ReviewPage({
   onRecommendShot
 }: {
   shot: ShotRecord;
+  pending?: boolean;
   previousShots: ShotRecord[];
   onSaveAnnotations: (shotId: string, annotations: ShotAnnotations) => Promise<void> | void;
   onSaveShotBag?: (shotId: string, bagId: string) => Promise<void> | void;
@@ -347,7 +349,7 @@ export function ReviewPage({
   });
 
   useEffect(() => {
-    if (!autoReadR2 || autoReadShotRef.current === shot.id) return;
+    if (pending || !autoReadR2 || autoReadShotRef.current === shot.id) return;
     autoReadShotRef.current = shot.id;
     const delayMs = Math.max(0, Math.round(autoReadR2DelaySeconds) * 1000);
     if (delayMs === 0) {
@@ -363,7 +365,7 @@ export function ReviewPage({
       window.clearTimeout(timer);
       if (autoReadShotRef.current === shot.id) autoReadShotRef.current = null;
     };
-  }, [autoReadR2, autoReadR2DelaySeconds, shot.id]);
+  }, [autoReadR2, autoReadR2DelaySeconds, pending, shot.id]);
 
   useEffect(() => {
     setSelectedShotId(shot.id);
@@ -387,7 +389,12 @@ export function ReviewPage({
   }, [failedGraphShotIds, loadShotGraph, onLoadShot, selectedShot.id, selectedShot.measurements?.length, selectedShotIsLatest]);
 
   return (
-    <div className="workflow-grid">
+    <fieldset className="workflow-grid review-fieldset" disabled={pending}>
+      {pending && (
+        <p className="panel wide" role="status">
+          Waiting for the app to save this shot. Live data is shown below; editing becomes available when saving finishes.
+        </p>
+      )}
       <section className="panel wide">
         <div className="review-graph-header">
           <h2>Shot Review</h2>
@@ -582,6 +589,6 @@ export function ReviewPage({
           </button>
         </div>
       </section>
-    </div>
+    </fieldset>
   );
 }

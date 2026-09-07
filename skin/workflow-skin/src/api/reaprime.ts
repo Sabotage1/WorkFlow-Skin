@@ -288,11 +288,11 @@ export class ReaPrimeApi {
   }
 
   getShot(id: string) {
-    return this.request<ShotRecord>(`/api/v1/shots/${encodeURIComponent(id)}`);
+    return this.request<ShotRecord>(`/api/v1/shots/${encodeURIComponent(id)}`, {}, 10000);
   }
 
   getLatestShot() {
-    return this.request<ShotRecord | null>("/api/v1/shots/latest");
+    return this.request<ShotRecord | null>("/api/v1/shots/latest", {}, 10000);
   }
 
   updateShot(id: string, patch: Partial<ShotRecord>) {
@@ -398,8 +398,8 @@ export class ReaPrimeApi {
     );
   }
 
-  getMachineState() {
-    return this.request<MachineState>("/api/v1/machine/state", {}, 10000);
+  getMachineState(timeoutMs = 10000) {
+    return this.request<MachineState>("/api/v1/machine/state", {}, timeoutMs);
   }
 
   getAppInfo() {
@@ -463,19 +463,19 @@ export class ReaPrimeApi {
     return this.request<DisplayState>("/api/v1/display/brightness", {
       method: "PUT",
       body: JSON.stringify({ brightness })
-    });
+    }, 5000);
   }
 
   requestWakeLock() {
     return this.request<DisplayState>("/api/v1/display/wakelock", {
       method: "POST"
-    });
+    }, 5000);
   }
 
   releaseWakeLock() {
     return this.request<DisplayState>("/api/v1/display/wakelock", {
       method: "DELETE"
-    });
+    }, 5000);
   }
 
   getMachineSettings() {
@@ -561,7 +561,7 @@ export class ReaPrimeApi {
   }
 
   sleepMachine() {
-    return this.requestMachineState("sleeping");
+    return this.request<void>("/api/v1/machine/state/sleeping", { method: "PUT" }, 15000);
   }
 
   wakeMachine() {

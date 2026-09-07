@@ -1,4 +1,4 @@
-# WorkFlow 0.3.10 compatibility with Decaid 0.8.5
+# WorkFlow 0.3.11 compatibility with Decaid 0.8.5
 
 Checked on 2026-09-07 against the installed version reported by the user and
 the latest stable upstream release, Decaid 0.8.5 (formerly ReaPrime).
@@ -32,6 +32,37 @@ Initial loading now retries if the local API has not resumed, and foreground
 or online events refresh saved data and reopen telemetry. Concurrent full
 refreshes are coalesced.
 
+## Confirmed sleep and immediate Review
+
+The screen distinguishes pending, confirmed and unconfirmed machine sleep.
+The sleep command is sent before optional display operations, then verified
+with machine-state reads. A successful HTTP acknowledgment alone does not
+confirm sleep. Failed requests retain the screensaver and expose a retry
+button; a five-second state check withdraws confirmation if the machine wakes
+or becomes unreachable. Sleep reads time out after three seconds, the sleep
+command after fifteen seconds, and display commands after five seconds.
+Waking during a pending sleep waits for that command before sending wake, and
+an in-flight dim operation finishes before brightness is restored.
+
+Automatic R2 measurement recovery no longer wakes the espresso machine.
+Device wake operations also check the current sleep intent before sending a
+wake command, so an earlier device task cannot intentionally undo new sleep.
+
+Review opens with the captured machine graph and workflow as soon as an
+observed brew returns idle, even if the sequencer still reports stopping or no
+scale is connected. Preheating without an observed brew is not completion.
+Fresh idle reads remain authoritative until slower cached state catches up.
+
+The completed-shot detail is fetched directly and retried in the background,
+without waiting for history, devices, bags, or settings to refresh. While the
+native shot is not yet saved, Review stays open with a clear status and
+read-only controls. It never substitutes the prior shot for a missing new shot.
+Missing scale yield stays blank. Once persistence finishes, the saved shot
+replaces the preview, editing becomes available, and optional R2 auto-reading
+can start. A late response cannot reopen Review after navigation or overwrite
+a newer shot. The skin does not create a substitute native shot if Decaid
+fails to persist one.
+
 ## Compatibility coverage
 
 | Feature | Contract checked in upstream 0.8.5 | Verification |
@@ -46,7 +77,7 @@ refreshes are coalesced.
 | Community | External community API and local profile installation | Existing community regression tests |
 
 The repeatable contract check parses the skin's actual request calls and
-compares 60 REST/telemetry routes and methods against upstream specifications.
+compares 61 REST/telemetry routes and methods against upstream specifications.
 Three explicitly retained legacy fallback routes are reported separately.
 Route checks do not validate all payload fields or exercise the physical machine.
 
@@ -58,14 +89,19 @@ npm run e2e
 npm run package
 ```
 
-Validation: 394 unit/integration tests and 16 desktop/tablet browser checks
+Validation: 400 unit/integration tests and 18 desktop/tablet browser checks
 passed, including a sleep/wake scenario with an aborted workflow fetch, HTTP
 503, recovery, preserved dose/yield/steam settings, and no stale error banner.
-Production build and ZIP integrity/manifest checks passed for the package.
+Additional regressions cover acknowledged-but-awake sleep, retry, external
+wake, wake during pending sleep, R2 failure after sleep, missing scale and
+measurements, delayed native persistence, stale espresso snapshots, blocked
+history refresh, and late responses after navigation. The desktop/tablet test
+shows the live graph before native persistence while unrelated history is
+stalled. Production build and ZIP integrity/manifest checks passed.
 
 The browser tests use a simulated gateway. The actual Android tablet, BLE
 scale, R2 readings, brewing/weight stop, and external upload services were not
 operated in this session. A physical sleep/wake cycle after installing the ZIP
 remains the hardware confirmation step. Install `workflow-skin.zip` from the
-[v0.3.10 release](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.10),
+[v0.3.11 release](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.11),
 or check for skin updates in Decaid using `Sabotage1/WorkFlow-Skin`.

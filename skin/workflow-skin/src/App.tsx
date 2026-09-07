@@ -122,6 +122,7 @@ type CompletedActivityCapture = {
   profileId?: string;
   startLatestShotId?: string | null;
   shotId?: string;
+  machineBrewObserved?: boolean;
 };
 
 const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
@@ -176,14 +177,6 @@ function appVersionAtLeast(version: string | null | undefined, minimum: readonly
     if (current[index] < minimum[index]) return false;
   }
   return true;
-}
-
-function sleepFailureStatusMessage(error: unknown): string {
-  const message = errorMessage(error).toLowerCase();
-  if (message.includes("devicenotconnected") || message.includes("machine not connected") || message.includes("not connected")) {
-    return "Screensaver is on. The machine was already disconnected, so the sleep command was skipped.";
-  }
-  return "Screensaver is on. The machine did not confirm sleep.";
 }
 
 function versionLabel(value: string | null | undefined): string {
@@ -494,15 +487,16 @@ function screensaverBrightnessValue(value: number | undefined): number {
   return Math.min(100, Math.max(0, Math.round(value ?? 8)));
 }
 
-async function wakeMachineIfNeeded(api: ReaPrimeApi, fallbackMachineState: MachineState | null): Promise<MachineState | null> {
+async function wakeMachineIfNeeded(api: ReaPrimeApi, fallbackMachineState: MachineState | null, canWake: () => boolean): Promise<MachineState | null> {
   const latestState = await api.getMachineState().catch(() => fallbackMachineState);
-  if (!isSleepingMachine(latestState)) return latestState;
+  if (!canWake() || !isSleepingMachine(latestState)) return latestState;
 
   await api.wakeMachine().catch(() => undefined);
 
   let nextState: MachineState | null = latestState;
   for (const delay of [250, 750, 1500]) {
     await waitForNativeUpdate(delay);
+    if (!canWake()) return nextState;
     nextState = await api.getMachineState().catch(() => nextState);
     if (!isSleepingMachine(nextState)) return nextState;
   }
@@ -517,38 +511,6 @@ function autoSleepCheckIntervalMs(idleLimitMs: number): number {
 function shotWithFallbackMeasurements(shot: ShotRecord, fallbackMeasurements: ShotSnapshot[]): ShotRecord {
   if ((shot.measurements?.length ?? 0) > 0 || fallbackMeasurements.length === 0) return shot;
   return { ...shot, measurements: fallbackMeasurements };
-}
-
-function pendingPersistenceStartShotId(shot: ShotRecord | null): string | null | undefined {
-  if (!shot?.id.startsWith("workflow-pending-")) return undefined;
-  const value = shot.metadata?.workflowSkinPendingStartShotId;
-  return typeof value === "string" || value === null ? value : undefined;
-}
-
-async function loadCompletedShot(
-  api: ReaPrimeApi,
-  completed: CompletedActivityCapture,
-  fallbackLatestShot: ShotRecord | null
-): Promise<ShotRecord | null> {
-  if (completed.shotId) {
-    for (const delay of [0, 150, 450, 900, 1500, 2500]) {
-      if (delay > 0) await waitForNativeUpdate(delay);
-      const shot = await api.getShot(completed.shotId).catch(() => null);
-      if (shot) return shot;
-    }
-    const latestShot = await api.getLatestShot().catch(() => null);
-    return latestShot?.id === completed.shotId ? latestShot : null;
-  }
-  if (completed.startLatestShotId === undefined) {
-    return api.getLatestShot().catch(() => fallbackLatestShot);
-  }
-  const startingShotId = completed.startLatestShotId;
-  for (const delay of COMPLETED_SHOT_RETRY_DELAYS_MS) {
-    if (delay > 0) await waitForNativeUpdate(delay);
-    const latestShot = await api.getLatestShot().catch(() => null);
-    if (latestShot && latestShot.id !== startingShotId) return latestShot;
-  }
-  return null;
 }
 
 function mergeReviewShot(cachedShot: ShotRecord | null, refreshedShot: ShotRecord | undefined): ShotRecord | null {
@@ -808,6 +770,11 @@ export function App() {
   const [editingSlotIndex, setEditingSlotIndex] = useState<number | null>(null);
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [sleepPending, setSleepPending] = useState(false);
+  const [sleepStatus, setSleepStatus] = useState<"pending" | "confirmed" | "failed" | "unknown">("unknown");
+  const sleepGenerationRef = useRef(0);
+  const machineSleepRequestedRef = useRef(false);
+  const sleepCommandRef = useRef<Promise<void> | null>(null);
+  const sleepDisplayRef = useRef<Promise<void> | null>(null);
   const [expandedStatusId, setExpandedStatusId] = useState<TopStatusIndicatorId | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [lastUseAt, setLastUseAt] = useState(() => Date.now());
@@ -819,7 +786,7 @@ export function App() {
   const [waterRefillAcknowledged, setWaterRefillAcknowledged] = useState(false);
   const [waterRefillVisible, setWaterRefillVisible] = useState(false);
   const [completedReviewShot, setCompletedReviewShot] = useState<ShotRecord | null>(null);
-  const [completedReviewLoading, setCompletedReviewLoading] = useState(false);
+  const [pendingCompletedReview, setPendingCompletedReview] = useState<{ capture: CompletedActivityCapture; shot: ShotRecord } | null>(null);
   const [nativeGatewayMode, setNativeGatewayMode] = useState<string | null | undefined>(undefined);
   const [nativePreferredScaleId, setNativePreferredScaleId] = useState<string | null | undefined>(undefined);
   const [communityRecommendations, setCommunityRecommendations] = useState<CommunityRecommendation[]>([]);
@@ -861,7 +828,6 @@ export function App() {
   const lastUseStateAtRef = useRef(lastUseAt);
   const autoSleepPendingRef = useRef(false);
   const completedActivityRef = useRef<CompletedActivityCapture | null>(null);
-  const completedActivityRoutingRef = useRef(false);
   const lastHandledShotLifecycleIdRef = useRef<string | null>(null);
   const completedActivityTimerRef = useRef<number | null>(null);
   const ignoreActiveActivityUntilAtRef = useRef(0);
@@ -910,11 +876,10 @@ export function App() {
   const workflowPageProfileId = selectedProfileId ?? (page === "steam" || page === "review" ? lastCompletedProfileId : undefined);
   const activeProfile = data.profiles.find((profile) => profile.id === workflowPageProfileId);
   const refreshedCompletedReviewShot = completedReviewShot ? data.shots.find((shot) => shot.id === completedReviewShot.id) : undefined;
-  const reviewShot = completedReviewLoading
-    ? null
-    : completedReviewShot
-      ? mergeReviewShot(completedReviewShot, refreshedCompletedReviewShot)
-      : latestShot;
+  const reviewShot = completedReviewShot
+    ? mergeReviewShot(completedReviewShot, refreshedCompletedReviewShot)
+    : latestShot;
+  const reviewPending = Boolean(reviewShot && pendingCompletedReview?.shot.id === reviewShot.id);
   const activeProfileWorkflow = profileWorkflowFor(data.settings, workflowPageProfileId);
   const visualizerPlugin = data.plugins?.find((plugin) => plugin.id === "visualizer.reaplugin") ?? null;
   const machineLiveConfirmed = !liveTelemetry.machineVerificationActive || liveTelemetry.machineStreamConnected;
@@ -976,13 +941,20 @@ export function App() {
     ? liveTelemetry.shotLifecycle
     : liveTelemetry.latestFinishedShotLifecycle;
   const handledShotLifecycleId = lastHandledShotLifecycleIdRef.current;
+  // The sequencer can remain in stopping when no scale settles. Once the
+  // machine has actually brewed and returned idle, review can start while
+  // native persistence finishes. Preheating alone is not a completed brew.
+  const machineBrewEnded = Boolean(
+    completedActivityRef.current?.machineBrewObserved && isIdleMode(currentMachineMode) &&
+    (!liveTelemetry.machineStreamConnected || isIdleMode(liveTelemetry.machineMode?.state) || liveTelemetry.shotLifecycle?.state === "stopping")
+  );
   const sequencedBrewActive = Boolean(
-    rawSequencedBrewActive &&
+    rawSequencedBrewActive && !machineBrewEnded &&
     (!liveTelemetry.shotLifecycle?.shotId || liveTelemetry.shotLifecycle.shotId !== handledShotLifecycleId)
   );
   const handledShotLifecycleSettling = Boolean(
     handledShotLifecycleId &&
-    finishedShotLifecycle?.shotId === handledShotLifecycleId &&
+    (finishedShotLifecycle?.shotId === handledShotLifecycleId || liveTelemetry.shotLifecycle?.shotId === handledShotLifecycleId) &&
     (!rawSequencedBrewActive || liveTelemetry.shotLifecycle?.shotId === handledShotLifecycleId)
   );
   const sequencedBrewFinished = Boolean(
@@ -1755,7 +1727,7 @@ export function App() {
   useEffect(() => {
     if (!data.loaded || page !== "live" || brewingCoffee) return;
     if (drinkWorkflowBusyRef.current) return;
-    if (completedActivityRef.current?.activity === "brew" || completedActivityRoutingRef.current || completedActivityTimerRef.current !== null) return;
+    if (completedActivityRef.current?.activity === "brew" || completedActivityTimerRef.current !== null) return;
     if (latestShot) {
       const fallbackReviewShot = shotWithFallbackMeasurements(latestShot, liveTelemetry.measurements);
       setCompletedReviewShot(fallbackReviewShot);
@@ -1771,7 +1743,10 @@ export function App() {
     const shouldPoll = shouldPollMachineState({
       currentMode: currentMachineMode,
       liveMode: liveTelemetry.machineStreamConnected ? liveTelemetry.machineMode?.state : undefined,
-      hasCompletedActivity: Boolean(completedActivityRef.current) || sequencedBrewActive || sequencedBrewFinished
+      // Keep the fresh idle read until the slower cached snapshot catches up.
+      // Clearing it earlier can repeatedly resurrect the previous espresso.
+      hasCompletedActivity: Boolean(completedActivityRef.current) || sequencedBrewActive || sequencedBrewFinished ||
+        Boolean(fastMachineState && !liveTelemetry.machineStreamConnected && data.machineState?.state?.state !== fastMachineState.state?.state)
     });
     if (!shouldPoll) {
       setFastMachineState(null);
@@ -1792,85 +1767,63 @@ export function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [api, currentMachineMode, data.loaded, liveTelemetry.machineMode?.state, liveTelemetry.machineStreamConnected, page, sequencedBrewActive, sequencedBrewFinished]);
+  }, [api, currentMachineMode, data.loaded, data.machineState?.state?.state, fastMachineState?.state?.state, liveTelemetry.machineMode?.state, liveTelemetry.machineStreamConnected, page, sequencedBrewActive, sequencedBrewFinished]);
 
   const routeCompletedActivity = useCallback(
-    async (completed: CompletedActivityCapture) => {
-      if (completedActivityRoutingRef.current) return;
-      completedActivityRoutingRef.current = true;
+    (completed: CompletedActivityCapture) => {
       if (completed.shotId) lastHandledShotLifecycleIdRef.current = completed.shotId;
-      try {
-        if (completed.activity === "brew") {
-          setCompletedReviewLoading(true);
-          setCompletedReviewShot(null);
-          setPage("review");
-        }
-        await data.refresh();
-        if (completed.activity === "brew") {
-          const latestCompletedShot = await loadCompletedShot(api, completed, latestShot);
-          if (!latestCompletedShot || (completed.startLatestShotId !== undefined && latestCompletedShot.id === completed.startLatestShotId)) {
-            if (completed.shotId || liveTelemetry.measurements.length > 0) {
-              const pendingShotId = completed.shotId ?? `workflow-pending-${Date.now()}`;
-              const pendingShot: ShotRecord = {
-                id: pendingShotId,
-                timestamp: new Date().toISOString(),
-                workflow: data.workflow,
-                measurements: liveTelemetry.measurements,
-                ...(completed.shotId
-                  ? {}
-                  : { metadata: { workflowSkinPendingStartShotId: completed.startLatestShotId ?? latestShot?.id ?? null } })
-              };
-              setCompletedReviewShot(pendingShot);
-              setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
-              ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-              skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId });
-              setPage("review");
-              return;
-            }
-
-            setCompletedReviewShot(null);
-            setAutoReadR2ShotId(null);
-            autoReadR2ShotIdRef.current = null;
-            ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-            skinLog("brew_ended_without_saved_shot", { startLatestShotId: completed.startLatestShotId ?? null });
-            setPage("brew");
-            return;
-          }
-
-          const completedShotForReview = latestCompletedShot ? shotWithFallbackMeasurements(latestCompletedShot, liveTelemetry.measurements) : null;
-          if (completedShotForReview) setCompletedReviewShot(completedShotForReview);
-
-          if (completedShotForReview && r2Available && autoReadR2ShotIdRef.current !== completedShotForReview.id) {
-            autoReadR2ShotIdRef.current = completedShotForReview.id;
-            setAutoReadR2ShotId(completedShotForReview.id);
-          }
-
-          const completedProfileId = completed.profileId ?? selectedProfileIdFromWorkflow(completedShotForReview?.workflow, data.profiles);
-          setLastCompletedProfileId(completedProfileId);
-          ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-          skinLog("brew_completed", { shotId: completedShotForReview?.id ?? null, profileId: completedProfileId ?? null });
-          setPage("review");
-          return;
-        }
-
-        ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-        setPage("review");
-      } finally {
-        setCompletedReviewLoading(false);
-        completedActivityRoutingRef.current = false;
+      ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
+      if (completed.activity === "brew") {
+        const pendingShot: ShotRecord = {
+          id: `workflow-pending-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          workflow: data.workflow,
+          measurements: [...liveTelemetry.measurements]
+        };
+        setCompletedReviewShot(pendingShot);
+        setPendingCompletedReview({ capture: completed, shot: pendingShot });
+        setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
+        setAutoReadR2ShotId(null);
+        skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId: pendingShot.id });
       }
+      setPage("review");
     },
-    [api, data.profiles, data.refresh, data.workflow, latestShot, liveTelemetry.measurements, r2Available]
+    [data.profiles, data.workflow, liveTelemetry.measurements]
   );
 
   useEffect(() => {
-    const startingShotId = pendingPersistenceStartShotId(completedReviewShot);
-    if (startingShotId === undefined || !latestShot || latestShot.id === startingShotId) return;
-    const persistedShot = shotWithFallbackMeasurements(latestShot, completedReviewShot?.measurements ?? liveTelemetry.measurements);
-    setCompletedReviewShot(persistedShot);
-    setLastCompletedProfileId(selectedProfileIdFromWorkflow(persistedShot.workflow, data.profiles));
-    skinLog("brew_pending_persistence_resolved", { shotId: persistedShot.id });
-  }, [completedReviewShot, data.profiles, latestShot, liveTelemetry.measurements]);
+    if (!pendingCompletedReview || completedReviewShot?.id !== pendingCompletedReview.shot.id || page !== "review" || brewingCoffee) return;
+    const { capture, shot: pendingShot } = pendingCompletedReview;
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempt = 0;
+    const check = async () => {
+      // Fetch the one completed shot directly. History, devices and settings
+      // refresh independently and must not delay the review screen.
+      const saved = await (capture.shotId ? api.getShot(capture.shotId) : api.getLatestShot()).catch(() => null);
+      if (cancelled) return;
+      const matches = saved && (capture.shotId
+        ? saved.id === capture.shotId
+        : saved.id !== capture.startLatestShotId);
+      if (matches) {
+        const completedShot = shotWithFallbackMeasurements(saved, pendingShot.measurements ?? []);
+        setCompletedReviewShot(completedShot);
+        data.cacheShot(completedShot);
+        setPendingCompletedReview(null);
+        setLastCompletedProfileId(capture.profileId ?? selectedProfileIdFromWorkflow(completedShot.workflow, data.profiles));
+        if (r2Available && autoReadR2ShotIdRef.current !== completedShot.id) {
+          autoReadR2ShotIdRef.current = completedShot.id;
+          setAutoReadR2ShotId(completedShot.id);
+        }
+        skinLog("brew_pending_persistence_resolved", { shotId: completedShot.id });
+        return;
+      }
+      attempt += 1;
+      timer = window.setTimeout(() => { void check(); }, COMPLETED_SHOT_RETRY_DELAYS_MS[attempt] ?? 5000);
+    };
+    void check();
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [api, brewingCoffee, completedReviewShot?.id, data.cacheShot, data.profiles, page, pendingCompletedReview, r2Available]);
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -1906,18 +1859,19 @@ export function App() {
         ? null
         : modeActivity;
     if (activeActivity) {
-      if (completedActivityRoutingRef.current) return;
-      if (Date.now() < ignoreActiveActivityUntilAtRef.current) return;
+      if (Date.now() < ignoreActiveActivityUntilAtRef.current && (!liveTelemetry.shotLifecycle?.shotId || liveTelemetry.shotLifecycle.shotId === lastHandledShotLifecycleIdRef.current)) return;
       if (completedActivityRef.current?.activity !== activeActivity) {
         completedActivityRef.current = {
           activity: activeActivity,
           profileId: selectedProfileId,
-          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current : undefined,
-          shotId: activeActivity === "brew" ? liveTelemetry.shotLifecycle?.shotId ?? undefined : undefined
+          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current ?? latestShot?.id ?? null : undefined,
+          shotId: activeActivity === "brew" ? liveTelemetry.shotLifecycle?.shotId ?? undefined : undefined,
+          machineBrewObserved: activeActivity === "brew" && isBrewingMode(currentMachineMode)
         };
       } else if (activeActivity === "brew" && !completedActivityRef.current.shotId && liveTelemetry.shotLifecycle?.shotId) {
         completedActivityRef.current = { ...completedActivityRef.current, shotId: liveTelemetry.shotLifecycle.shotId };
       }
+      if (activeActivity === "brew" && isBrewingMode(currentMachineMode)) completedActivityRef.current.machineBrewObserved = true;
       if (completedActivityTimerRef.current !== null) {
         window.clearTimeout(completedActivityTimerRef.current);
         completedActivityTimerRef.current = null;
@@ -1930,7 +1884,6 @@ export function App() {
 
     const completed = completedActivityRef.current;
     if (completed.activity === "brew") {
-      if (completedActivityRoutingRef.current) return;
       completedActivityRef.current = null;
       void routeCompletedActivity(completed);
       return;
@@ -2178,7 +2131,6 @@ export function App() {
     drinkWorkflowRunTokenRef.current = token;
     drinkWorkflowBusyRef.current = true;
     completedActivityRef.current = null;
-    completedActivityRoutingRef.current = false;
     if (completedActivityTimerRef.current !== null) {
       window.clearTimeout(completedActivityTimerRef.current);
       completedActivityTimerRef.current = null;
@@ -2281,7 +2233,7 @@ export function App() {
     setStatus({ type: "success", message: "Looking for DiFluid R2." });
     try {
       await enqueueDeviceConnection(async () => {
-        await wakeMachineIfNeeded(api, data.machineState);
+        await wakeMachineIfNeeded(api, data.machineState, () => !machineSleepRequestedRef.current);
         const discovery = await discoverAvailableDevices(api, {
           fallbackDevices: data.devices ?? [],
           predicate: (device) => isR2Device(device) || isConfiguredR2Device(device, data.settings.r2SensorId),
@@ -2457,7 +2409,7 @@ export function App() {
       const scaleReady = (devices: DeviceInfo[]) =>
         hasConnectedScale(devices) &&
         (!liveTelemetry.scaleVerificationActive || scaleLiveConnectedRef.current);
-      await wakeMachineIfNeeded(api, data.machineState);
+      await wakeMachineIfNeeded(api, data.machineState, () => !machineSleepRequestedRef.current);
       const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
       if (scaleReady(initialDevices)) {
         await data.refreshConnectivity();
@@ -2749,7 +2701,7 @@ export function App() {
 
   const reconnectR2ForMeasurement = async (sensorId: string): Promise<string> => {
     return enqueueDeviceConnection(async () => {
-      await wakeMachineIfNeeded(api, data.machineState);
+      if (machineSleepRequestedRef.current) throw new Error("R2 recovery paused while the machine is sleeping.");
       const scannedDevices = await api.scanDevices({ connect: false, quick: false }).catch(() => [] as DeviceInfo[]);
       const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
       const r2Devices = uniqueDevices([...scannedDevices, ...listedDevices]).filter(
@@ -2757,6 +2709,7 @@ export function App() {
       );
       const reconnectIds = new Set([sensorId, ...r2Devices.map((device) => device.id)]);
       for (const deviceId of reconnectIds) {
+        if (machineSleepRequestedRef.current) throw new Error("R2 recovery paused while the machine is sleeping.");
         await api.connectDevice(deviceId).catch(() => undefined);
       }
 
@@ -2820,8 +2773,9 @@ export function App() {
     }
   };
 
-  const applyScreensaverDisplay = useCallback(async () => {
+  const applyScreensaverDisplay = useCallback(async (isCurrent: () => boolean) => {
     const brightness = screensaverBrightnessValue(data.settings.screensaverBrightness);
+    if (!isCurrent()) return;
     await api.releaseWakeLock().catch((error) => {
       skinLog("screensaver_wakelock_release_failed", { error: errorMessage(error) });
     });
@@ -2829,6 +2783,7 @@ export function App() {
     let lastError: unknown = null;
     for (const delay of DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS) {
       if (delay > 0) await waitForNativeUpdate(delay);
+      if (!isCurrent()) return;
       try {
         const display = await api.setDisplayBrightness(brightness);
         const requestedBrightness = display.requestedBrightness ?? display.brightness;
@@ -2851,27 +2806,73 @@ export function App() {
   }, [api, data.settings.screensaverBrightness]);
 
   const sleepMachine = useCallback(async () => {
+    if (sleepCommandRef.current) return;
+    const generation = ++sleepGenerationRef.current;
+    const isCurrent = () => startupMountedRef.current && sleepGenerationRef.current === generation;
+    machineSleepRequestedRef.current = true;
     setSleepPending(true);
+    setSleepStatus("pending");
     setPage("screensaver");
+    // Send the machine command before optional display APIs; dimming must not
+    // delay or prevent the heater sleep request.
+    const command = api.sleepMachine();
+    sleepCommandRef.current = command;
+    let confirmed = false;
     try {
-      await applyScreensaverDisplay();
-      await api.sleepMachine();
-      await data.refresh();
-      await applyScreensaverDisplay();
-      setStatus({ type: "success", message: "Machine sleep requested." });
+      await command;
+      for (const delay of [0, 250, 750, 1500, 2500]) {
+        if (delay) await waitForNativeUpdate(delay);
+        if (!isCurrent()) return;
+        const state = await api.getMachineState(3000).catch(() => null);
+        if (!isCurrent()) return;
+        if (state) setFastMachineState(state);
+        if (state?.connected !== false && isSleepingMachine(state)) {
+          confirmed = true;
+          break;
+        }
+      }
+      if (isCurrent()) setSleepStatus(confirmed ? "confirmed" : "failed");
     } catch (error) {
       skinLog("machine_sleep_request_failed", { error: errorMessage(error) });
-      setStatus({ type: "success", message: sleepFailureStatusMessage(error) });
+      // A lost HTTP response can still mean the command reached the machine.
+      const state = await api.getMachineState(3000).catch(() => null);
+      if (isCurrent()) {
+        if (state) setFastMachineState(state);
+        confirmed = Boolean(state && state.connected !== false && isSleepingMachine(state));
+        setSleepStatus(confirmed ? "confirmed" : "failed");
+      }
     } finally {
-      setSleepPending(false);
+      if (sleepCommandRef.current === command) sleepCommandRef.current = null;
+      if (isCurrent()) {
+        setSleepPending(false);
+        sleepDisplayRef.current = applyScreensaverDisplay(isCurrent);
+      }
     }
-  }, [api, applyScreensaverDisplay, data.refresh]);
+  }, [api, applyScreensaverDisplay]);
+
+  useEffect(() => {
+    if (page !== "screensaver" || sleepPending) return;
+    let cancelled = false;
+    const check = async () => {
+      const state = await api.getMachineState(3000).catch(() => null);
+      if (cancelled) return;
+      if (state) setFastMachineState(state);
+      setSleepStatus(state && state.connected !== false && isSleepingMachine(state) ? "confirmed" : "failed");
+    };
+    const timer = window.setInterval(() => { void check(); }, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [api, page, sleepPending]);
 
   useEffect(() => {
     sleepMachineRef.current = sleepMachine;
   }, [sleepMachine]);
 
   const wakeScreen = async () => {
+    const generation = ++sleepGenerationRef.current;
+    const isCurrent = () => startupMountedRef.current && sleepGenerationRef.current === generation;
+    setSleepPending(false);
+    machineSleepRequestedRef.current = false;
+    const pendingSleep = sleepCommandRef.current;
     const now = Date.now();
     const manualSelectionVersion = manualProfileSelectionRef.current.version;
     autoSleepPendingRef.current = false;
@@ -2881,12 +2882,22 @@ export function App() {
     wakeScreenStartupResetUntilRef.current = now + 15_000;
     setPage("brew");
     setStatus(null);
-    await api.setDisplayBrightness(100).catch(() => undefined);
-    if (data.settings.keepScreenAwake !== false) {
-      await api.requestWakeLock().catch(() => undefined);
-    }
-    await wakeMachineIfNeeded(api, data.machineState);
-    await runStartupRecovery({ manualSelectionVersion, recoverDevices: true });
+    // An earlier sleep command must settle before sending wake.
+    await pendingSleep?.catch(() => undefined);
+    if (!isCurrent()) return;
+    await Promise.all([
+      wakeMachineIfNeeded(api, data.machineState, isCurrent),
+      (async () => {
+        // Restore brightness after any dim command already in flight.
+        await sleepDisplayRef.current;
+        if (!isCurrent()) return;
+        await api.setDisplayBrightness(100).catch(() => undefined);
+        if (isCurrent() && data.settings.keepScreenAwake !== false) {
+          await api.requestWakeLock().catch(() => undefined);
+        }
+      })()
+    ]);
+    if (isCurrent()) await runStartupRecovery({ manualSelectionVersion, recoverDevices: true });
   };
 
   useEffect(() => {
@@ -3020,6 +3031,8 @@ export function App() {
       <ScreensaverPage
         title={data.settings.skinTitle}
         brightness={screensaverBrightnessValue(data.settings.screensaverBrightness)}
+        sleepStatus={sleepStatus}
+        onRetrySleep={() => void sleepMachine()}
         onWake={() => void wakeScreen()}
       />
     );
@@ -3212,6 +3225,7 @@ export function App() {
             <ReviewPage
               key={reviewShot.id}
               shot={reviewShot}
+              pending={reviewPending}
               previousShots={data.shots}
               onSaveAnnotations={saveReview}
               onSaveShotBag={saveReviewShotBag}
@@ -3224,7 +3238,7 @@ export function App() {
               grinders={data.grinders ?? []}
               defaultGrinderId={data.settings.defaultGrinderId ?? data.settings.lastGrinderId}
               bags={data.bags}
-              onLoadShot={(shotId) => api.getShot(shotId)}
+              onLoadShot={reviewPending ? undefined : (shotId) => api.getShot(shotId)}
               onRecommendShot={recommendHistoryShot}
             />
           ) : (

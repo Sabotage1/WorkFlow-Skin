@@ -115,6 +115,7 @@ function mockReaFetch(
     workflowUpdateStaleCount?: number;
     workflowUpdateFailures?: Array<number | "network">;
     sleepMachineDelay?: Promise<unknown>;
+    sleepMachineUpdatesState?: boolean;
     sleepMachineStatus?: number;
     sleepMachineBody?: string;
     steams?: unknown[];
@@ -314,7 +315,7 @@ function mockReaFetch(
         return Promise.resolve(new Response(options.sleepMachineBody ?? "sleep failed", { status: options.sleepMachineStatus }));
       }
       const sleep = () => {
-        machineState = { ...machineState, connected: true, state: { state: "sleeping", substate: "idle" } };
+        if (options.sleepMachineUpdatesState !== false) machineState = { ...machineState, connected: true, state: { state: "sleeping", substate: "idle" } };
         return Promise.resolve(new Response("", { status: 200 }));
       };
       return options.sleepMachineDelay ? options.sleepMachineDelay.then(sleep) : sleep();
@@ -1914,7 +1915,7 @@ describe("App shell", () => {
 
     fetchState.setMachineState({ connected: true, state: { state: "idle" } });
     await act(async () => {
-      vi.advanceTimersByTime(500);
+      await vi.advanceTimersByTimeAsync(500);
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -2067,6 +2068,59 @@ describe("App shell", () => {
     expect(fetchState.scaleTareCount).toBe(0);
   });
 
+  it("loads the completed shot while unrelated history refresh is stalled", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "espresso", substate: "pouring" } }
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Live Brew" });
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let releaseHistory!: () => void;
+    const historyPending = new Promise<void>((resolve) => { releaseHistory = resolve; });
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (new URL(String(input)).pathname === "/api/v1/shots") {
+        return historyPending.then(() => originalFetch(input, init));
+      }
+      return originalFetch(input, init);
+    });
+    act(() => window.dispatchEvent(new Event("online")));
+    fetchState.setShots([{
+      id: "fast-review", timestamp: "2026-09-07T10:00:00Z", workflow: { context: { targetDoseWeight: 18 } },
+      measurements: [
+        { machine: { timestamp: "2026-09-07T10:00:00Z", pressure: 2 } },
+        { machine: { timestamp: "2026-09-07T10:00:25Z", pressure: 8 } }
+      ]
+    }]);
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await waitFor(() => expect(screen.getByText("Duration: 25s")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Save Review" })).toBeEnabled();
+    expect(screen.getByLabelText("Yield", { exact: true })).toHaveValue("");
+    await act(async () => { releaseHistory(); });
+  });
+
+  it("does not interrupt navigation when a late completed-shot response arrives", async () => {
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "espresso", substate: "pouring" } }
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Live Brew" });
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let finishSaving!: () => void;
+    const saved = new Promise<void>((resolve) => { finishSaving = resolve; });
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/shots/latest")) return saved.then(() => responseJson({
+        id: "late-shot", timestamp: "2026-09-07T10:00:00Z", workflow: {}, measurements: []
+      }));
+      return originalFetch(input, init);
+    });
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await screen.findByText(/Waiting for the app to save this shot/);
+    await userEvent.click(screen.getByRole("button", { name: "Brew" }));
+    await act(async () => { finishSaving(); });
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
+  });
+
   it("waits on Review for delayed shot persistence instead of flashing back to Brew", async () => {
     vi.useFakeTimers();
     const previousShot: ShotRecord = {
@@ -2155,7 +2209,7 @@ describe("App shell", () => {
     );
   });
 
-  it("stays on brew without issuing a late tare when espresso returns idle without a saved shot", async () => {
+  it("keeps Review available without a scale, samples or a saved shot and never shows the previous shot", async () => {
     vi.useFakeTimers();
     const previousShot: ShotRecord = {
       id: "previous-shot",
@@ -2196,8 +2250,12 @@ describe("App shell", () => {
     });
     await act(async () => vi.advanceTimersByTimeAsync(10_500));
 
-    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the app to save this shot/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Review" })).toBeDisabled();
+    expect(screen.getByLabelText("Yield", { exact: true })).toHaveValue("");
+    expect(screen.queryByText("Yield: 30 g")).not.toBeInTheDocument();
     expect(fetchState.scaleTareCount).toBe(0);
     expect(fetchState.fetchMock).not.toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.anything());
   });
@@ -2299,6 +2357,30 @@ describe("App shell", () => {
 
     expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
     expect(screen.queryByText("Steam Workflow")).not.toBeInTheDocument();
+  });
+
+  it("does not wake the machine when an R2 reading fails after entering sleep", async () => {
+    const fetchState = mockReaFetch({ ...initialSettings, r2SensorId: "r2" }, {
+      sensors: [detectedR2Sensor],
+      shots: [{ id: "r2-sleep-shot", timestamp: "2026-09-07T10:00:00Z", workflow: {}, measurements: [] }]
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let failMeasurement!: () => void;
+    const delayedFailure = new Promise<void>((resolve) => { failMeasurement = resolve; });
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/execute")) return delayedFailure.then(() => new Response("Timed out", { status: 500 }));
+      return originalFetch(input, init);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    expect(await screen.findByText("Machine sleeping")).toBeInTheDocument();
+    await act(async () => { failMeasurement(); });
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
   });
 
   it("reconnects and retries R2 when the native measure command times out", async () => {
@@ -2545,10 +2627,59 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Sleep machine" }));
 
-    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    expect(screen.getByText("Requesting machine sleep…")).toBeInTheDocument();
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
     expect(screen.getByText("Tap the screen to wake")).toBeInTheDocument();
 
     resolveSleep?.();
+  });
+
+  it("does not confirm an acknowledged sleep command until the machine reports sleep, and supports retry", async () => {
+    const fetchState = mockReaFetch(initialSettings, { sleepMachineUpdatesState: false });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sleep machine" })).toBeEnabled());
+    vi.useFakeTimers();
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    expect(screen.getByText("Requesting machine sleep…")).toBeInTheDocument();
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(screen.getByText("Sleep not confirmed")).toBeInTheDocument();
+    fetchState.setMachineState({ connected: true, state: { state: "sleeping" } });
+    await act(async () => { screen.getByRole("button", { name: "Retry machine sleep" }).click(); });
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+  });
+
+  it("withdraws sleep confirmation if the machine wakes while the screensaver remains open", async () => {
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sleep machine" })).toBeEnabled());
+    vi.useFakeTimers();
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByText("Sleep not confirmed")).toBeInTheDocument();
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+  });
+
+  it("wakes after an earlier pending sleep command settles without returning to the screensaver", async () => {
+    let resolveSleep!: () => void;
+    const fetchState = mockReaFetch(initialSettings, {
+      sleepMachineDelay: new Promise<void>((resolve) => { resolveSleep = resolve; })
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sleep machine" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    await act(async () => { resolveSleep(); });
+    await waitFor(() => expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    ));
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/display/brightness", expect.objectContaining({ body: JSON.stringify({ brightness: 8 }) })
+    );
   });
 
   it("keeps the screensaver visible when the native sleep request fails because the machine is disconnected", async () => {
@@ -2563,6 +2694,9 @@ describe("App shell", () => {
 
     expect(await screen.findByText("Tap the screen to wake")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+    expect(screen.getByText("Sleep not confirmed")).toBeInTheDocument();
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry machine sleep" })).toBeInTheDocument();
     expect(screen.queryByText(/De1Controller\.connectedDe1/i)).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/display/brightness",
