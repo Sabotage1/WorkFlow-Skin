@@ -113,6 +113,7 @@ function mockReaFetch(
     workflow?: unknown;
     workflowUpdateDelay?: (count: number, nextWorkflow: unknown) => Promise<unknown> | undefined;
     workflowUpdateStaleCount?: number;
+    workflowUpdateFailures?: Array<number | "network">;
     sleepMachineDelay?: Promise<unknown>;
     sleepMachineStatus?: number;
     sleepMachineBody?: string;
@@ -297,6 +298,9 @@ function mockReaFetch(
     if (method === "GET" && url.pathname === "/api/v1/workflow") return responseJson(workflow);
     if (method === "PUT" && url.pathname === "/api/v1/workflow") {
       workflowUpdateCount += 1;
+      const failure = options.workflowUpdateFailures?.[workflowUpdateCount - 1];
+      if (failure === "network") return Promise.reject(new TypeError("Failed to fetch"));
+      if (failure) return responseJson({ error: "Machine unavailable" }, failure);
       const nextWorkflow = JSON.parse(String(init.body));
       const updateWorkflow = () => {
         if (workflowUpdateCount > (options.workflowUpdateStaleCount ?? 0)) workflow = nextWorkflow;
@@ -666,6 +670,7 @@ describe("App shell", () => {
     render(<App />);
 
     await screen.findByRole("button", { name: "Light Blooming" });
+    await waitFor(() => expect(consoleLog.mock.calls.some((call) => String(call[0]).includes('"event":"skin_ready"'))).toBe(true));
     const readyLog = consoleLog.mock.calls
       .map((call) => String(call[0]))
       .find((line) => line.startsWith("[WorkFlow Skin] ") && line.includes('"event":"skin_ready"'));
@@ -1424,8 +1429,99 @@ describe("App shell", () => {
     );
     render(<App />);
 
-    await waitFor(() => expect(fetchState.workflowUpdateCount).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBeGreaterThanOrEqual(2), { timeout: 2500 });
     expect(await screen.findByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("backs off after wake network and 503 failures, then clears the error after confirmation", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, {
+      workflowUpdateFailures: ["network", 503, 503],
+      appInfo: { version: "0.8.5" }
+    });
+    render(<App />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    expect(screen.queryByText(/Could not apply startup profile/)).not.toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchState.workflowUpdateCount).toBe(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(fetchState.workflowUpdateCount).toBe(3);
+    expect(screen.getByText(/Retrying automatically/)).toBeInTheDocument();
+    fetchState.setWorkflow({ context: { targetDoseWeight: 20, targetYield: 44, extras: { otherSkin: "keep" } } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(fetchState.workflowUpdateCount).toBe(4);
+    expect(fetchState.workflow).toEqual(expect.objectContaining({
+      profile: profiles[1].profile,
+      context: expect.objectContaining({ targetDoseWeight: 20, targetYield: 44, extras: { otherSkin: "keep", workflowSkin: { selectedProfileId: "p2" } } })
+    }));
+    expect(screen.queryByText(/Could not apply startup profile/)).not.toBeInTheDocument();
+  });
+
+  it("cancels delayed startup retries when a preset is selected manually", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, { workflowUpdateFailures: ["network"] });
+    render(<App />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+    expect(fetchState.workflowUpdateCount).toBe(2);
+    expect(fetchState.workflow).toEqual(expect.objectContaining({ profile: profiles[0].profile }));
+    expect(screen.queryByText(/Could not apply startup profile/)).not.toBeInTheDocument();
+  });
+
+  it("does not roll back a manual preset when an older startup request fails late", async () => {
+    let rejectStartup: (error: Error) => void = () => undefined;
+    const pending = new Promise<void>((_resolve, reject) => { rejectStartup = reject; });
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, {
+      workflowUpdateDelay: (count) => count === 1 ? pending : undefined
+    });
+    render(<App />);
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBe(2));
+    await act(async () => { rejectStartup(new TypeError("Failed to fetch")); });
+    expect(fetchState.workflow).toEqual(expect.objectContaining({ profile: profiles[0].profile }));
+    expect(screen.getByRole("button", { name: "Light Blooming" })).toHaveAttribute("aria-current", "true");
+    expect(screen.queryByText(/Could not apply startup profile/)).not.toBeInTheDocument();
+  });
+
+  it("cancels scheduled startup retries when the skin unloads", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, { workflowUpdateFailures: ["network"] });
+    const view = render(<App />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+  });
+
+  it("does not retry a rejected startup profile payload", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, { workflowUpdateFailures: [400, 400] });
+    render(<App />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const attempts = fetchState.workflowUpdateCount;
+    expect(screen.getByText(/Could not apply startup profile/)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(fetchState.workflowUpdateCount).toBe(attempts);
+  });
+
+  it("waits for a fresh machine connection before writing the startup profile", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({ ...initialSettings, startupProfileId: "p2" }, {
+      machineState: { connected: false, state: { state: "idle" } }
+    });
+    render(<App />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fetchState.workflowUpdateCount).toBe(0);
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
   });
 
   it("does not wake, scan, or apply startup profile while the machine is sleeping in the background", async () => {

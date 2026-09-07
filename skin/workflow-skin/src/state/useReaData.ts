@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReaPrimeApi } from "../api/reaprime";
 import type {
   AppInfo,
@@ -163,13 +163,15 @@ export function useReaData(api: ReaPrimeApi) {
       void refreshSupplemental().catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
       });
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setLoaded(true);
+      return false;
     }
   }, [api, refreshConnectivity, refreshSupplemental]);
 
-  const refresh = useCallback(async () => {
+  const refreshAll = useCallback(async () => {
     try {
       const [
         profileList,
@@ -244,9 +246,48 @@ export function useReaData(api: ReaPrimeApi) {
     }
   }, [api]);
 
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refresh = useCallback(() => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const request = refreshAll().finally(() => {
+      if (refreshInFlight.current === request) refreshInFlight.current = null;
+    });
+    refreshInFlight.current = request;
+    return request;
+  }, [refreshAll]);
+
   useEffect(() => {
-    void refreshInitial();
+    let disposed = false;
+    let timer: number | undefined;
+    let failures = 0;
+    const load = async () => {
+      const ready = await refreshInitial();
+      if (!ready && !disposed) {
+        timer = window.setTimeout(load, Math.min(1000 * 2 ** Math.min(failures++, 5), 30000));
+      }
+    };
+    void load();
+    return () => { disposed = true; window.clearTimeout(timer); };
   }, [refreshInitial]);
+
+  useEffect(() => {
+    let lastRefreshAt = -Infinity;
+    const resume = () => {
+      if (document.visibilityState === "hidden" || Date.now() - lastRefreshAt < 1000) return;
+      lastRefreshAt = Date.now();
+      void refresh();
+    };
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", resume);
+    window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", resume);
+    return () => {
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", resume);
+      window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", resume);
+    };
+  }, [refresh]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {

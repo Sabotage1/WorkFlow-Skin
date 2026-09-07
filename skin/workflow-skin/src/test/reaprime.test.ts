@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiBaseUrl, ReaPrimeApi } from "../api/reaprime";
+import { apiBaseUrl, isTransientApiError, ReaPrimeApi, ReaPrimeApiError } from "../api/reaprime";
 
 describe("apiBaseUrl", () => {
   it("uses the current hostname on ReaPrime port 8080", () => {
@@ -13,8 +13,32 @@ describe("apiBaseUrl", () => {
 
 describe("ReaPrimeApi", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     localStorage.clear();
+  });
+
+  it.each([409, 503, 504])("preserves Decaid connection failure %s without repeating obsolete requests", async (status) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("Device unavailable", { status }));
+    await expect(new ReaPrimeApi("http://machine:8080").connectDevice("scale-1")).rejects.toMatchObject({ status });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds stalled wake-state reads without replaying machine commands", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+    const result = new ReaPrimeApi("http://machine:8080").getMachineState().catch((error) => error);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(await result).toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("distinguishes temporary workflow errors from invalid requests", () => {
+    expect(isTransientApiError(new TypeError("Failed to fetch"))).toBe(true);
+    for (const status of [408, 409, 429, 500, 502, 503, 504]) expect(isTransientApiError(new ReaPrimeApiError("failed", status))).toBe(true);
+    for (const status of [400, 401, 403, 404, 405, 422]) expect(isTransientApiError(new ReaPrimeApiError("failed", status))).toBe(false);
   });
 
   it("loads profiles from ReaPrime", async () => {

@@ -109,6 +109,12 @@ export class ReaPrimeApiError extends Error {
   }
 }
 
+export function isTransientApiError(error: unknown): boolean {
+  return error instanceof TypeError ||
+    (error instanceof Error && error.name === "AbortError") ||
+    (error instanceof ReaPrimeApiError && [408, 409, 429, 500, 502, 503, 504].includes(error.status));
+}
+
 const SETTINGS_KEY = "settings";
 
 function localSettingsKey(namespace: string, key: string): string {
@@ -145,21 +151,28 @@ function writeLocalSetting(namespace: string, key: string, value: unknown): bool
 export class ReaPrimeApi {
   constructor(private readonly baseUrl = apiBaseUrl()) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
     const method = init.method ?? "GET";
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init.headers ?? {})
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        ...(controller ? { signal: controller.signal } : {}),
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(init.headers ?? {})
+        }
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new ReaPrimeApiError(`${method} ${path} failed: ${response.status} ${text}`, response.status);
       }
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new ReaPrimeApiError(`${method} ${path} failed: ${response.status} ${text}`, response.status);
+      return text ? (JSON.parse(text) as T) : (undefined as T);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
     }
-    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
 
   listProfiles() {
@@ -185,14 +198,14 @@ export class ReaPrimeApi {
   }
 
   getWorkflow() {
-    return this.request<Workflow>("/api/v1/workflow");
+    return this.request<Workflow>("/api/v1/workflow", {}, 10000);
   }
 
   updateWorkflow(patch: Partial<Workflow>) {
     return this.request<Workflow>("/api/v1/workflow", {
       method: "PUT",
       body: JSON.stringify(patch)
-    });
+    }, 60000);
   }
 
   listBeans() {
@@ -386,7 +399,7 @@ export class ReaPrimeApi {
   }
 
   getMachineState() {
-    return this.request<MachineState>("/api/v1/machine/state");
+    return this.request<MachineState>("/api/v1/machine/state", {}, 10000);
   }
 
   getAppInfo() {
@@ -424,8 +437,11 @@ export class ReaPrimeApi {
     return this.request<void>("/api/v1/devices/connect", {
       method: "PUT",
       body: JSON.stringify({ deviceId })
-    }).catch((primaryError) =>
-      this.request<void>("/api/v1/devices/connect", {
+    }).catch((primaryError) => {
+      // Decaid 0.8.5 reports transport failures/conflicts explicitly. Repeating
+      // them with obsolete payloads only competes with native BLE recovery.
+      if (!(primaryError instanceof ReaPrimeApiError) || ![400, 404, 405].includes(primaryError.status)) throw primaryError;
+      return this.request<void>("/api/v1/devices/connect", {
         method: "PUT",
         body: JSON.stringify({ id: deviceId })
       }).catch(() =>
@@ -435,8 +451,8 @@ export class ReaPrimeApi {
         }).catch(() => {
           throw primaryError;
         })
-      )
-    );
+      );
+    });
   }
 
   getDisplay() {

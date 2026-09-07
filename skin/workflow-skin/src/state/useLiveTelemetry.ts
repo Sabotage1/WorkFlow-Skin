@@ -123,10 +123,12 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     };
     window.addEventListener("focus", reconnect);
     window.addEventListener("pageshow", reconnect);
+    window.addEventListener("online", reconnect);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("focus", reconnect);
       window.removeEventListener("pageshow", reconnect);
+      window.removeEventListener("online", reconnect);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [reconnect]);

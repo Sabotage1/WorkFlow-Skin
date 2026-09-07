@@ -58,6 +58,33 @@ describe("useReaData", () => {
     expect(api.listProfiles).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a WebView reload while the native API is resuming", async () => {
+    vi.useFakeTimers();
+    const api = createApi();
+    api.listProfiles.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    expect(result.current.error).toBe("Failed to fetch");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.listProfiles).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("refreshes saved data once for a burst of foreground and online events", async () => {
+    const api = createApi();
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    api.listProfiles.mockResolvedValue([{ id: "new", profile: { title: "Updated in Decaid" } }]);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+    });
+    await flushPromises();
+    expect(api.listProfiles).toHaveBeenCalledTimes(2);
+    expect(result.current.profiles[0].id).toBe("new");
+  });
+
   it("makes profiles and presets available before slow history data finishes loading", async () => {
     const api = createApi();
     let releaseBeans: (() => void) | undefined;

@@ -19,7 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import skinManifest from "../skin-manifest.json";
 import { CommunityApi } from "./api/community";
-import { apiBaseUrl, ReaPrimeApi, ReaPrimeApiError, type CreateGrinderPayload } from "./api/reaprime";
+import { apiBaseUrl, isTransientApiError, ReaPrimeApi, ReaPrimeApiError, type CreateGrinderPayload } from "./api/reaprime";
 import { findDifluidR2Sensor } from "./api/sensors";
 import type {
   BurrType,
@@ -834,7 +834,7 @@ export function App() {
   const [drinkWorkflowRun, setDrinkWorkflowRun] = useState<DrinkWorkflowRunState>(IDLE_DRINK_WORKFLOW_RUN);
   const [selectedPresetWorkflowId, setSelectedPresetWorkflowId] = useState<string | undefined>();
   const [presetEditorMode, setPresetEditorMode] = useState<"profile" | "workflow">("profile");
-  const startupProfileApplyRef = useRef<{ profileId: string | null; attempts: number; pending: boolean; complete: boolean }>({
+  const startupProfileApplyRef = useRef<{ profileId: string | null; attempts: number; pending: boolean; complete: boolean; retryAt?: number }>({
     profileId: null,
     attempts: 0,
     pending: false,
@@ -842,6 +842,11 @@ export function App() {
   });
   const manualProfileSelectionRef = useRef<{ version: number; profileId: string | null }>({ version: 0, profileId: null });
   const startupConnectRef = useRef(false);
+  const startupMountedRef = useRef(true);
+  useEffect(() => {
+    startupMountedRef.current = true;
+    return () => { startupMountedRef.current = false; };
+  }, []);
   const startupRecoveryRef = useRef<Promise<void> | null>(null);
   const deviceConnectionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const foregroundDeviceRecoveryRef = useRef<Promise<void> | null>(null);
@@ -964,6 +969,8 @@ export function App() {
   const waterLow = waterRefillRequired(machineStateForWater, verifiedWaterLevels);
   const waterLowDetail = waterRefillMessage(machineStateForWater, verifiedWaterLevels);
   const machineSleeping = isSleepingMode(currentMachineMode);
+  const startupProfilePausedRef = useRef(false);
+  startupProfilePausedRef.current = machineSleeping || page === "screensaver" || Boolean(currentMachineMode && !isIdleMode(currentMachineMode));
   const rawSequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
   const finishedShotLifecycle = isFinishedShotLifecycle(liveTelemetry.shotLifecycle)
     ? liveTelemetry.shotLifecycle
@@ -1325,6 +1332,7 @@ export function App() {
   }, []);
 
   const reapplyManualProfileSelection = useCallback(async () => {
+    const workflow = await api.getWorkflow();
     const manualProfileId = manualProfileSelectionRef.current.profileId;
     if (!manualProfileId) return;
 
@@ -1332,10 +1340,10 @@ export function App() {
     if (!manualProfile) return;
 
     setStartupProfileHoldId(null);
-    const nextWorkflow = workflowForSelectedProfile(data.workflow, manualProfile);
+    const nextWorkflow = workflowForSelectedProfile(workflow, manualProfile);
     const updatedWorkflow = await api.updateWorkflow(nextWorkflow);
-    data.setWorkflow(updatedWorkflow);
-  }, [api, data.profiles, data.workflow, data.setWorkflow]);
+    if (manualProfileSelectionRef.current.profileId === manualProfileId) data.setWorkflow(updatedWorkflow);
+  }, [api, data.profiles, data.setWorkflow]);
 
   const applyProfile = async (
     profile: ProfileRecord,
@@ -1353,7 +1361,7 @@ export function App() {
       }
       data.setWorkflow(updatedWorkflow);
     } catch (error) {
-      if (options.optimistic) data.setWorkflow(previousWorkflow);
+      if (options.optimistic && (!options.commitIf || options.commitIf())) data.setWorkflow(previousWorkflow);
       throw error;
     }
   };
@@ -1364,6 +1372,8 @@ export function App() {
       setStartupProfileHoldId(null);
       return;
     }
+    // Recovery refreshes must not replace an in-flight attempt or erase its backoff.
+    if (startupProfileApplyRef.current.profileId === startupProfileId && !startupProfileApplyRef.current.complete) return;
     startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
     setStartupProfileHoldId(startupProfileId);
     setStartupApplyTick((tick) => tick + 1);
@@ -1555,52 +1565,79 @@ export function App() {
       startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
     }
 
-    if (machineSleeping || drinkWorkflowBusyRef.current) return;
+    if (machineSleeping || page === "screensaver" || drinkWorkflowBusyRef.current || document.visibilityState === "hidden") return;
 
-    if (startupProfileApplyRef.current.complete) return;
-
-    if (workflowSelectedProfileId === startupProfileId) {
-      startupProfileApplyRef.current.pending = false;
-      startupProfileApplyRef.current.complete = true;
-      if (Date.now() > wakeScreenStartupResetUntilRef.current) {
-        setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
-      }
-      return;
-    }
-
-    if (startupProfileApplyRef.current.pending) return;
-    if (startupProfileApplyRef.current.attempts >= 3) {
-      startupProfileApplyRef.current.complete = true;
-      setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
-      return;
+    const attempt = startupProfileApplyRef.current;
+    if (attempt.complete || attempt.pending) return;
+    const remainingDelay = (attempt.retryAt ?? 0) - Date.now();
+    if (remainingDelay > 0) {
+      const timer = window.setTimeout(() => setStartupApplyTick((tick) => tick + 1), remainingDelay);
+      return () => window.clearTimeout(timer);
     }
 
     const startupProfile = data.profiles.find((profile) => profile.id === startupProfileId);
     if (!startupProfile) return;
-
     const selectionVersion = manualProfileSelectionRef.current.version;
-    startupProfileApplyRef.current.attempts += 1;
-    startupProfileApplyRef.current.pending = true;
-    applyProfile(startupProfile, {
-      optimistic: true,
-      commitIf: () => manualProfileSelectionRef.current.version === selectionVersion,
-      onDiscardedUpdate: reapplyManualProfileSelection
-    })
-      .catch((error) => {
-        setStartupProfileHoldId((current) => (current === startupProfileId ? null : current));
+    const isCurrent = () => startupMountedRef.current && startupProfileApplyRef.current === attempt &&
+      manualProfileSelectionRef.current.version === selectionVersion && !attempt.complete;
+    const clearStartupError = () => setStatus((current) => current?.message.startsWith("Could not apply startup profile:") ? null : current);
+    attempt.pending = true;
+
+    void (async () => {
+      // A resumed WebView can retain a selected preset while the gateway and
+      // machine are still reconnecting. Confirm both through fresh reads.
+      const [workflow, machine] = await Promise.all([api.getWorkflow(), api.getMachineState()]);
+      if (!isCurrent()) return;
+      setFastMachineState(machine);
+      if (machine.connected === false) throw new ReaPrimeApiError("Waiting for the machine to reconnect", 503);
+      const mode = machine.state?.state;
+      if (startupProfilePausedRef.current || document.visibilityState === "hidden" || (mode && !isIdleMode(mode)) || drinkWorkflowBusyRef.current) {
+        attempt.retryAt = Date.now() + 2000;
+        return;
+      }
+      let confirmed = workflow;
+      if (selectedProfileIdFromWorkflow(workflow, data.profiles) !== startupProfileId) {
+        confirmed = await api.updateWorkflow(workflowForSelectedProfile(workflow, startupProfile));
+        if (!isCurrent()) {
+          if (startupMountedRef.current && manualProfileSelectionRef.current.version !== selectionVersion) await reapplyManualProfileSelection();
+          return;
+        }
+      }
+      if (selectedProfileIdFromWorkflow(confirmed, data.profiles) !== startupProfileId) {
+        throw new ReaPrimeApiError("The app has not confirmed the startup profile yet", 503);
+      }
+      data.setWorkflow(confirmed);
+      attempt.complete = true;
+      clearStartupError();
+      if (Date.now() > wakeScreenStartupResetUntilRef.current) {
+        setStartupProfileHoldId((current) => current === startupProfileId ? null : current);
+      }
+    })().catch((error) => {
+      if (!isCurrent()) return;
+      attempt.attempts += 1;
+      if (isTransientApiError(error)) {
+        const delay = Math.min(1000 * 2 ** Math.min(attempt.attempts - 1, 5), 30000);
+        attempt.retryAt = Date.now() + delay;
+        skinLog("startup_profile_retry", { attempt: attempt.attempts, delay, error: errorMessage(error) });
+        if (attempt.attempts >= 3) {
+          setStatus({ type: "error", message: "Could not apply startup profile: waiting for the app and machine to reconnect. Retrying automatically." });
+        }
+      } else {
+        attempt.complete = true;
+        setStartupProfileHoldId((current) => current === startupProfileId ? null : current);
         setStatus({ type: "error", message: `Could not apply startup profile: ${errorMessage(error)}` });
-      })
-      .finally(() => {
-        startupProfileApplyRef.current.pending = false;
-        setStartupApplyTick((tick) => tick + 1);
-      });
-  }, [data.loaded, data.settings.startupProfileId, data.profiles, machineSleeping, workflowSelectedProfileId, startupApplyTick, reapplyManualProfileSelection]);
+      }
+    }).finally(() => {
+      attempt.pending = false;
+      if (startupMountedRef.current && startupProfileApplyRef.current === attempt) setStartupApplyTick((tick) => tick + 1);
+    });
+  }, [api, data.loaded, data.settings.startupProfileId, data.profiles, data.setWorkflow, machineSleeping, page, startupApplyTick, reapplyManualProfileSelection]);
 
   useEffect(() => {
     if (startupConnectRef.current || !data.loaded || machineSleeping) return;
     startupConnectRef.current = true;
 
-    void runStartupRecovery();
+    void runStartupRecovery({ resetStartupProfile: false });
   }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
@@ -1608,6 +1645,7 @@ export function App() {
 
     const requestRecovery = () => {
       if (page === "screensaver" || document.visibilityState === "hidden") return;
+      setStartupApplyTick((tick) => tick + 1);
       void recoverDevicesAfterForeground().catch((error) => {
         skinLog("foreground_device_recovery_failed", { error: errorMessage(error) });
       });
@@ -1624,12 +1662,14 @@ export function App() {
 
     window.addEventListener("focus", requestRecovery);
     window.addEventListener("pageshow", requestRecovery);
+    window.addEventListener("online", requestRecovery);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pointerdown", handleInteraction, { passive: true });
     window.addEventListener("touchstart", handleInteraction, { passive: true });
     return () => {
       window.removeEventListener("focus", requestRecovery);
       window.removeEventListener("pageshow", requestRecovery);
+      window.removeEventListener("online", requestRecovery);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pointerdown", handleInteraction);
       window.removeEventListener("touchstart", handleInteraction);
@@ -2405,6 +2445,7 @@ export function App() {
     manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId: profile.id };
     setStartupProfileHoldId(null);
     startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
+    setStatus((current) => current?.message.startsWith("Could not apply startup profile:") ? null : current);
     await applyProfile(profile, { optimistic: true });
     setLastUseAt(Date.now());
   };
@@ -2839,6 +2880,7 @@ export function App() {
     setLastUseAt(now);
     wakeScreenStartupResetUntilRef.current = now + 15_000;
     setPage("brew");
+    setStatus(null);
     await api.setDisplayBrightness(100).catch(() => undefined);
     if (data.settings.keepScreenAwake !== false) {
       await api.requestWakeLock().catch(() => undefined);
