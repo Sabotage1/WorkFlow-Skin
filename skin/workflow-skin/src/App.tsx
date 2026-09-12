@@ -814,7 +814,8 @@ export function App() {
     startupMountedRef.current = true;
     return () => { startupMountedRef.current = false; };
   }, []);
-  const startupRecoveryRef = useRef<Promise<void> | null>(null);
+  const startupRecoveryRef = useRef<{ generation: number; promise: Promise<void> } | null>(null);
+  const wakeMachinePendingRef = useRef(false);
   const deviceConnectionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const foregroundDeviceRecoveryRef = useRef<Promise<void> | null>(null);
   const foregroundDeviceRecoveryLastAtRef = useRef(0);
@@ -935,7 +936,7 @@ export function App() {
   const waterLowDetail = waterRefillMessage(machineStateForWater, verifiedWaterLevels);
   const machineSleeping = isSleepingMode(currentMachineMode);
   const startupProfilePausedRef = useRef(false);
-  startupProfilePausedRef.current = machineSleeping || page === "screensaver" || Boolean(currentMachineMode && !isIdleMode(currentMachineMode));
+  startupProfilePausedRef.current = machineSleeping || machineSleepRequestedRef.current || wakeMachinePendingRef.current || page === "screensaver" || Boolean(currentMachineMode && !isIdleMode(currentMachineMode));
   const rawSequencedBrewActive = isActiveShotLifecycle(liveTelemetry.shotLifecycle);
   const finishedShotLifecycle = isFinishedShotLifecycle(liveTelemetry.shotLifecycle)
     ? liveTelemetry.shotLifecycle
@@ -1303,20 +1304,6 @@ export function App() {
     setCommunityInitialDraft(null);
   }, []);
 
-  const reapplyManualProfileSelection = useCallback(async () => {
-    const workflow = await api.getWorkflow();
-    const manualProfileId = manualProfileSelectionRef.current.profileId;
-    if (!manualProfileId) return;
-
-    const manualProfile = data.profiles.find((profile) => profile.id === manualProfileId);
-    if (!manualProfile) return;
-
-    setStartupProfileHoldId(null);
-    const nextWorkflow = workflowForSelectedProfile(workflow, manualProfile);
-    const updatedWorkflow = await api.updateWorkflow(nextWorkflow);
-    if (manualProfileSelectionRef.current.profileId === manualProfileId) data.setWorkflow(updatedWorkflow);
-  }, [api, data.profiles, data.setWorkflow]);
-
   const applyProfile = async (
     profile: ProfileRecord,
     options: { optimistic?: boolean; commitIf?: () => boolean; onDiscardedUpdate?: () => Promise<void> | void } = {}
@@ -1338,18 +1325,44 @@ export function App() {
     }
   };
 
-  const resetStartupProfileApply = useCallback(() => {
+  const resetStartupProfileApply = useCallback((newWakeCycle = false) => {
     const startupProfileId = data.settings.startupProfileId;
     if (!startupProfileId) {
       setStartupProfileHoldId(null);
       return;
     }
-    // Recovery refreshes must not replace an in-flight attempt or erase its backoff.
-    if (startupProfileApplyRef.current.profileId === startupProfileId && !startupProfileApplyRef.current.complete) return;
+    if (newWakeCycle) {
+      // A choice made before sleep belongs to the previous awake session.
+      // Choices made after this boundary still cancel startup restoration.
+      manualProfileSelectionRef.current = { version: manualProfileSelectionRef.current.version + 1, profileId: null };
+      setSelectedPresetWorkflowId(undefined);
+    }
+    // Only a new wake may replace an in-flight attempt or erase its backoff.
+    if (!newWakeCycle && startupProfileApplyRef.current.profileId === startupProfileId && !startupProfileApplyRef.current.complete) return;
     startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
     setStartupProfileHoldId(startupProfileId);
     setStartupApplyTick((tick) => tick + 1);
   }, [data.settings.startupProfileId]);
+
+  const reapplyManualProfileSelection = useCallback(async () => {
+    const selection = manualProfileSelectionRef.current;
+    // A pre-sleep write can finish after the new startup profile. Verify the
+    // new cycle again instead of restoring the previous cycle's manual choice.
+    if (!selection.profileId) {
+      resetStartupProfileApply();
+      return;
+    }
+    const generation = sleepGenerationRef.current;
+    const workflow = await api.getWorkflow();
+    if (!startupMountedRef.current || machineSleepRequestedRef.current || generation !== sleepGenerationRef.current ||
+      selection !== manualProfileSelectionRef.current) return;
+    const manualProfile = data.profiles.find((profile) => profile.id === selection.profileId);
+    if (!manualProfile) return;
+
+    setStartupProfileHoldId(null);
+    const updatedWorkflow = await api.updateWorkflow(workflowForSelectedProfile(workflow, manualProfile));
+    if (selection === manualProfileSelectionRef.current) data.setWorkflow(updatedWorkflow);
+  }, [api, data.profiles, data.setWorkflow, resetStartupProfileApply]);
 
   const enqueueDeviceConnection = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
     const result = deviceConnectionQueueRef.current.then(task, task);
@@ -1363,15 +1376,20 @@ export function App() {
   const connectConfiguredStartupDevices = useCallback(async (
     options: { recovery?: boolean; preferredScaleId?: string | null; singleAttempt?: boolean } = {}
   ) => {
+    const generation = sleepGenerationRef.current;
+    const isCurrent = () => startupMountedRef.current && !machineSleepRequestedRef.current && sleepGenerationRef.current === generation;
     const recoveryDelays = options.recovery && !options.singleAttempt ? DEVICE_WAKE_RECOVERY_DELAYS_MS : [0];
     for (const delay of recoveryDelays) {
       if (delay > 0) await waitForNativeUpdate(delay);
       const ready = await enqueueDeviceConnection(async () => {
+        if (!isCurrent()) return true;
         const scannedDevices = await api.scanDevices({ connect: options.recovery !== true, quick: false }).catch((error) => {
           skinLog("startup_device_scan_failed", { recovery: options.recovery === true, error: errorMessage(error) });
           return [] as DeviceInfo[];
         });
+        if (!isCurrent()) return true;
         const listedDevices = await api.listDevices().catch(() => data.devices ?? []);
+        if (!isCurrent()) return true;
         const devices = uniqueDevices([...listedDevices, ...scannedDevices]).filter(isAvailableDevice);
         const knownScales = devices.filter((item) => isScaleDeviceCandidate(item) && !isR2Device(item));
         const requiresFreshScale = liveTelemetry.scaleVerificationActive && !scaleLiveConnectedRef.current;
@@ -1402,6 +1420,7 @@ export function App() {
           ...disconnectedR2
         ]);
         for (const device of startupCandidates) {
+          if (!isCurrent()) return true;
           await api.connectDevice(device.id).catch((error) => {
             skinLog("startup_device_connect_failed", { deviceId: device.id, error: errorMessage(error) });
           });
@@ -1427,30 +1446,32 @@ export function App() {
   }, [api, data.devices, data.settings.r2SensorId, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive, nativePreferredScaleId]);
 
   const runStartupRecovery = useCallback(
-    (options: { resetStartupProfile?: boolean; manualSelectionVersion?: number; recoverDevices?: boolean } = {}) => {
-      if (startupRecoveryRef.current) return startupRecoveryRef.current;
-      const manualSelectionVersion = options.manualSelectionVersion ?? manualProfileSelectionRef.current.version;
+    (options: { recoverDevices?: boolean } = {}) => {
+      const generation = sleepGenerationRef.current;
+      if (startupRecoveryRef.current?.generation === generation) return startupRecoveryRef.current.promise;
+      const isCurrent = () => startupMountedRef.current && !machineSleepRequestedRef.current && sleepGenerationRef.current === generation;
 
       let recovery: Promise<void>;
       recovery = (async () => {
-        await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
+        if (!isCurrent()) return;
+        // Core workflow restoration is independent of peripheral discovery.
+        // The device helper serializes BLE work and discards old wake cycles.
         await connectConfiguredStartupDevices({ recovery: options.recoverDevices === true });
+        if (!isCurrent()) return;
         await Promise.all([data.refreshConnectivity(), data.refreshWorkflow()]);
-        if (options.resetStartupProfile !== false && manualProfileSelectionRef.current.version === manualSelectionVersion) {
-          resetStartupProfileApply();
-        }
+        if (!isCurrent()) return;
         if (options.recoverDevices) foregroundDeviceRecoveryLastAtRef.current = Date.now();
         window.setTimeout(() => {
-          void data.refreshConnectivity();
+          if (isCurrent()) void data.refreshConnectivity();
         }, 1500);
       })().finally(() => {
-        if (startupRecoveryRef.current === recovery) startupRecoveryRef.current = null;
+        if (startupRecoveryRef.current?.promise === recovery) startupRecoveryRef.current = null;
       });
 
-      startupRecoveryRef.current = recovery;
+      startupRecoveryRef.current = { generation, promise: recovery };
       return recovery;
     },
-    [connectConfiguredStartupDevices, data.refreshConnectivity, data.refreshWorkflow, resetStartupProfileApply]
+    [connectConfiguredStartupDevices, data.refreshConnectivity, data.refreshWorkflow]
   );
 
   const recoverDevicesAfterForeground = useCallback(() => {
@@ -1537,7 +1558,7 @@ export function App() {
       startupProfileApplyRef.current = { profileId: startupProfileId, attempts: 0, pending: false, complete: false };
     }
 
-    if (machineSleeping || page === "screensaver" || drinkWorkflowBusyRef.current || document.visibilityState === "hidden") return;
+    if (machineSleeping || machineSleepRequestedRef.current || wakeMachinePendingRef.current || page === "screensaver" || drinkWorkflowBusyRef.current || document.visibilityState === "hidden") return;
 
     const attempt = startupProfileApplyRef.current;
     if (attempt.complete || attempt.pending) return;
@@ -1581,9 +1602,7 @@ export function App() {
       data.setWorkflow(confirmed);
       attempt.complete = true;
       clearStartupError();
-      if (Date.now() > wakeScreenStartupResetUntilRef.current) {
-        setStartupProfileHoldId((current) => current === startupProfileId ? null : current);
-      }
+      setStartupProfileHoldId((current) => current === startupProfileId ? null : current);
     })().catch((error) => {
       if (!isCurrent()) return;
       attempt.attempts += 1;
@@ -1606,10 +1625,10 @@ export function App() {
   }, [api, data.loaded, data.settings.startupProfileId, data.profiles, data.setWorkflow, machineSleeping, page, startupApplyTick, reapplyManualProfileSelection]);
 
   useEffect(() => {
-    if (startupConnectRef.current || !data.loaded || machineSleeping) return;
+    if (startupConnectRef.current || !data.loaded || machineSleeping || machineSleepRequestedRef.current || wakeMachinePendingRef.current) return;
     startupConnectRef.current = true;
 
-    void runStartupRecovery({ resetStartupProfile: false });
+    void runStartupRecovery();
   }, [data.loaded, machineSleeping, runStartupRecovery]);
 
   useEffect(() => {
@@ -2398,7 +2417,12 @@ export function App() {
     setStartupProfileHoldId(null);
     startupProfileApplyRef.current = { ...startupProfileApplyRef.current, pending: false, complete: true };
     setStatus((current) => current?.message.startsWith("Could not apply startup profile:") ? null : current);
-    await applyProfile(profile, { optimistic: true });
+    const selectionVersion = manualProfileSelectionRef.current.version;
+    await applyProfile(profile, {
+      optimistic: true,
+      commitIf: () => startupMountedRef.current && manualProfileSelectionRef.current.version === selectionVersion,
+      onDiscardedUpdate: reapplyManualProfileSelection
+    });
     setLastUseAt(Date.now());
   };
 
@@ -2487,9 +2511,15 @@ export function App() {
   }, [api, data.appInfo?.version, data.devices, data.machineState, data.refreshConnectivity, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive]);
 
   useEffect(() => {
-    if (!data.loaded) return;
+    if (!data.loaded || !machineConnected || !currentMachineMode) return;
     const wasSleeping = wasSleepingRef.current;
     wasSleepingRef.current = machineSleeping;
+    if (machineSleeping && wasSleeping !== true && !machineSleepRequestedRef.current && !wakeMachinePendingRef.current) {
+      // Retire the old recovery when native sleep begins. A first boot from
+      // sleep keeps the initial connection policy. Delayed sleep telemetry
+      // during an explicit wake belongs to that wake, not a new sleep cycle.
+      sleepGenerationRef.current += 1;
+    }
     if (wasSleeping !== true || machineSleeping) return;
 
     if (Date.now() <= wakeScreenStartupResetUntilRef.current) {
@@ -2497,8 +2527,10 @@ export function App() {
       return;
     }
 
+    if (page === "screensaver") return;
+    resetStartupProfileApply(true);
     void runStartupRecovery({ recoverDevices: true }).catch(() => undefined);
-  }, [data.loaded, machineSleeping, runStartupRecovery]);
+  }, [currentMachineMode, data.loaded, machineConnected, machineSleeping, page, resetStartupProfileApply, runStartupRecovery]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -2810,6 +2842,7 @@ export function App() {
     const generation = ++sleepGenerationRef.current;
     const isCurrent = () => startupMountedRef.current && sleepGenerationRef.current === generation;
     machineSleepRequestedRef.current = true;
+    wakeMachinePendingRef.current = false;
     setSleepPending(true);
     setSleepStatus("pending");
     setPage("screensaver");
@@ -2874,7 +2907,8 @@ export function App() {
     machineSleepRequestedRef.current = false;
     const pendingSleep = sleepCommandRef.current;
     const now = Date.now();
-    const manualSelectionVersion = manualProfileSelectionRef.current.version;
+    wakeMachinePendingRef.current = true;
+    resetStartupProfileApply(true);
     autoSleepPendingRef.current = false;
     lastUseAtRef.current = now;
     lastUseStateAtRef.current = now;
@@ -2885,19 +2919,26 @@ export function App() {
     // An earlier sleep command must settle before sending wake.
     await pendingSleep?.catch(() => undefined);
     if (!isCurrent()) return;
-    await Promise.all([
-      wakeMachineIfNeeded(api, data.machineState, isCurrent),
-      (async () => {
-        // Restore brightness after any dim command already in flight.
-        await sleepDisplayRef.current;
-        if (!isCurrent()) return;
-        await api.setDisplayBrightness(100).catch(() => undefined);
-        if (isCurrent() && data.settings.keepScreenAwake !== false) {
-          await api.requestWakeLock().catch(() => undefined);
-        }
-      })()
-    ]);
-    if (isCurrent()) await runStartupRecovery({ manualSelectionVersion, recoverDevices: true });
+    // Display restoration runs independently of the machine/profile boot path.
+    void (async () => {
+      await sleepDisplayRef.current;
+      if (!isCurrent()) return;
+      await api.setDisplayBrightness(100).catch(() => undefined);
+      if (isCurrent() && data.settings.keepScreenAwake !== false) {
+        await api.requestWakeLock().catch(() => undefined);
+      }
+    })();
+    try {
+      const state = await wakeMachineIfNeeded(api, data.machineState, isCurrent);
+      if (!isCurrent()) return;
+      if (state) setFastMachineState(state);
+    } finally {
+      if (isCurrent()) {
+        wakeMachinePendingRef.current = false;
+        setStartupApplyTick((tick) => tick + 1);
+      }
+    }
+    if (isCurrent()) await runStartupRecovery({ recoverDevices: true });
   };
 
   useEffect(() => {

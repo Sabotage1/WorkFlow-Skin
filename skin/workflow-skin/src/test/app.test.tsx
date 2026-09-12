@@ -1668,6 +1668,110 @@ describe("App shell", () => {
     );
   });
 
+  it("restores the configured startup preset after a different preset was manually selected before sleep", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile, context: { extras: { workflowSkin: { selectedProfileId: "p2" } } } } });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    await waitFor(() => expect(fetchState.workflowUpdateCount).toBe(1));
+    expect(screen.getByRole("button", { name: "Light Blooming" })).toHaveAttribute("aria-current", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await waitFor(() => expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } }));
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Light Blooming" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("rechecks the startup preset when a pre-sleep manual selection finishes after wake", async () => {
+    let finishOldSelection!: () => void;
+    const oldSelection = new Promise<void>((resolve) => { finishOldSelection = resolve; });
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, {
+      workflow: { profile: profiles[1].profile, context: { extras: { workflowSkin: { selectedProfileId: "p2" } } } },
+      workflowUpdateDelay: (count) => count === 1 ? oldSelection : undefined
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await screen.findByRole("heading", { name: "Brew" });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    await act(async () => { finishOldSelection(); });
+    await waitFor(() => expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } }));
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("keeps the last selection on wake when no startup preset is configured", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: undefined,
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sweet Classic" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("restores the startup preset even while wake device discovery is blocked", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile } });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let releaseScan!: () => void;
+    const scanGate = new Promise<void>((resolve) => { releaseScan = resolve; });
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes("/devices/scan")) return scanGate.then(() => originalFetch(input, init));
+      return originalFetch(input, init);
+    });
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+      await waitFor(() => expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } }));
+      expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+    } finally {
+      await act(async () => { releaseScan(); });
+    }
+  });
+
+  it("restores the startup preset after a native machine sleep/wake without resetting choices on ordinary focus", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow wake integration test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile } });
+    render(<App />);
+    await screen.findByRole("button", { name: "Light Blooming" });
+    const machine = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    const setMode = (mode: string) => {
+      fetchState.setMachineState({ connected: true, state: { state: mode } });
+      machine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state: mode } }) }));
+    };
+    act(() => setMode("idle"));
+    await userEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(screen.getByRole("button", { name: "Light Blooming" })).toHaveAttribute("aria-current", "true");
+    await act(async () => setMode("sleeping"));
+    await act(async () => setMode("idle"));
+    await waitFor(() => expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } }));
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+  });
+
   it("re-applies the startup profile and reconnects devices after waking from screensaver sleep", async () => {
     const fetchState = mockReaFetch({
       ...initialSettings,
@@ -2613,6 +2717,40 @@ describe("App shell", () => {
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ brightness: 100 }) })
     );
     expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/display/wakelock", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("continues explicit wake when sleeping telemetry arrives before the wake state read completes", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow wake integration test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await screen.findByRole("heading", { name: "Brew" });
+    const machine = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    const emitMode = (state: string) => machine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state } }) }));
+    act(() => emitMode("idle"));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let releaseState!: () => void;
+    const stateGate = new Promise<void>((resolve) => { releaseState = resolve; });
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/machine/state")) return stateGate.then(() => originalFetch(input, init));
+      return originalFetch(input, init);
+    });
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Tap the screen to wake" }));
+      await act(async () => emitMode("sleeping"));
+      await act(async () => { releaseState(); });
+      await waitFor(() => expect(fetchState.fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+      ));
+      await act(async () => emitMode("idle"));
+      expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    } finally {
+      await act(async () => { releaseState(); });
+    }
   });
 
   it("shows the screensaver immediately while the native sleep request is still pending", async () => {

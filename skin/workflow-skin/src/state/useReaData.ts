@@ -70,6 +70,7 @@ async function loadShots(api: ReaPrimeApi): Promise<{ items: ShotRecord[]; error
 export function useReaData(api: ReaPrimeApi) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [workflow, setWorkflow] = useState<Workflow>({});
+  const workflowRevisionRef = useRef(0);
   const [beans, setBeans] = useState<Bean[]>([]);
   const [batches, setBatches] = useState<BeanBatch[]>([]);
   const [grinders, setGrinders] = useState<Grinder[]>([]);
@@ -91,23 +92,21 @@ export function useReaData(api: ReaPrimeApi) {
   const [loaded, setLoaded] = useState(false);
 
   const refreshConnectivity = useCallback(async () => {
-    const [sensorList, deviceList, info, state, display] = await Promise.all([
-      api.listSensors().catch(() => [] as SensorListItem[]),
-      api.listDevices().catch(() => [] as DeviceInfo[]),
-      api.getAppInfo().catch(() => null as AppInfo | null),
-      api.getMachineState().catch(() => null as MachineState | null),
-      api.getDisplay().catch(() => null as DisplayState | null)
+    // Publish each result as it arrives so an optional display/sensor read
+    // cannot hide a successful machine connection during boot.
+    await Promise.all([
+      api.listSensors().catch(() => [] as SensorListItem[]).then(setSensors),
+      api.listDevices().catch(() => [] as DeviceInfo[]).then(setDevices),
+      api.getAppInfo().catch(() => null as AppInfo | null).then(setAppInfo),
+      api.getMachineState().catch(() => null as MachineState | null).then(setMachineState),
+      api.getDisplay().catch(() => null as DisplayState | null).then(setDisplayState)
     ]);
-    setSensors(sensorList);
-    setDevices(deviceList);
-    setAppInfo(info);
-    setMachineState(state);
-    setDisplayState(display);
   }, [api]);
 
   const refreshWorkflow = useCallback(async () => {
+    const revision = workflowRevisionRef.current;
     const workflowData = await api.getWorkflow().catch(() => null);
-    if (workflowData) setWorkflow(workflowData);
+    if (workflowData && workflowRevisionRef.current === revision) setWorkflow(workflowData);
   }, [api]);
 
   const refreshSupplemental = useCallback(async () => {
@@ -148,18 +147,22 @@ export function useReaData(api: ReaPrimeApi) {
   }, [api]);
 
   const refreshInitial = useCallback(async () => {
+    const revision = workflowRevisionRef.current;
     try {
-      const [profileList, workflowData, savedSettings] = await Promise.all([
+      const [profileList, workflowData, savedSettings, state] = await Promise.all([
         api.listProfiles(),
         api.getWorkflow(),
         loadSkinSettings(api),
-        refreshConnectivity()
+        api.getMachineState().catch(() => null as MachineState | null)
       ]);
       setProfiles(profileList);
-      setWorkflow(workflowData);
+      if (workflowRevisionRef.current === revision) setWorkflow(workflowData);
+      setMachineState(state);
       setSettings(savedSettings);
       setError(null);
       setLoaded(true);
+      // Optional display and peripheral reads must not block presets at boot.
+      void refreshConnectivity();
       void refreshSupplemental().catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -172,6 +175,7 @@ export function useReaData(api: ReaPrimeApi) {
   }, [api, refreshConnectivity, refreshSupplemental]);
 
   const refreshAll = useCallback(async () => {
+    const revision = workflowRevisionRef.current;
     try {
       const [
         profileList,
@@ -220,7 +224,7 @@ export function useReaData(api: ReaPrimeApi) {
           ])
         : [null, null, null, null, null];
       setProfiles(profileList);
-      setWorkflow(workflowData);
+      if (workflowRevisionRef.current === revision) setWorkflow(workflowData);
       setBeans(beanList);
       setBatches(batchLists.flat());
       setGrinders(grinderList);
@@ -317,6 +321,7 @@ export function useReaData(api: ReaPrimeApi) {
   }, []);
 
   const setWorkflowData = useCallback((next: Workflow) => {
+    workflowRevisionRef.current += 1;
     setWorkflow(next);
   }, []);
 

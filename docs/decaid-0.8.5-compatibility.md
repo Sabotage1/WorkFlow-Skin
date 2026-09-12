@@ -1,6 +1,6 @@
-# WorkFlow 0.3.11 compatibility with Decaid 0.8.5
+# WorkFlow 0.3.12 compatibility with Decaid 0.8.5
 
-Checked on 2026-09-07 against the installed version reported by the user and
+Checked on 2026-09-12 against the installed version reported by the user and
 the latest stable upstream release, Decaid 0.8.5 (formerly ReaPrime).
 
 Upstream source: [`v0.8.5`, commit `a08bc41e02c66c71f8da56b624c642264afebbc6`](https://github.com/decentespresso/decaid/tree/v0.8.5).
@@ -31,6 +31,32 @@ Decaid can unload an embedded skin after ten minutes in the background.
 Initial loading now retries if the local API has not resumed, and foreground
 or online events refresh saved data and reopen telemetry. Concurrent full
 refreshes are coalesced.
+
+## Startup preset restoration in 0.3.12
+
+A manual preset selected before sleep no longer overrides the configured
+startup preset during the next wake. Each wake starts a new selection cycle;
+a manual choice made after waking still wins. Without a configured startup
+preset, the last selection remains in use. Native machine wake events receive
+the same reset; ordinary focus events preserve the current selection.
+
+Core boot loads profiles, workflow, settings, and machine state without waiting
+for optional display or sensor information. Machine connection results publish
+as soon as they arrive. On explicit wake, startup restoration waits for the
+sleep/wake machine commands, then proceeds independently of display restoration
+and BLE discovery. Device recovery from an older sleep cycle is discarded.
+
+A workflow refresh started before a newer local selection cannot overwrite its
+confirmed result. A pre-sleep profile write that finishes after wake triggers
+a fresh startup verification instead of restoring the old manual choice.
+
+New regression cases exercise an actual manual preset choice before sleep,
+late profile writes, blocked device discovery/display reads, native wake,
+ordinary focus, no configured startup preset, delayed sleeping telemetry during
+explicit wake, and stale full/partial refreshes.
+Desktop and tablet browser tests start from a different preset, check the
+native workflow and the selected card after wake, and repeat with stalled
+peripheral endpoints or transient gateway failures.
 
 ## Confirmed sleep and immediate Review
 
@@ -89,7 +115,7 @@ npm run e2e
 npm run package
 ```
 
-Validation: 400 unit/integration tests and 18 desktop/tablet browser checks
+Validation: 410 unit/integration tests and 20 desktop/tablet browser checks
 passed, including a sleep/wake scenario with an aborted workflow fetch, HTTP
 503, recovery, preserved dose/yield/steam settings, and no stale error banner.
 Additional regressions cover acknowledged-but-awake sleep, retry, external
@@ -103,5 +129,5 @@ The browser tests use a simulated gateway. The actual Android tablet, BLE
 scale, R2 readings, brewing/weight stop, and external upload services were not
 operated in this session. A physical sleep/wake cycle after installing the ZIP
 remains the hardware confirmation step. Install `workflow-skin.zip` from the
-[v0.3.11 release](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.11),
+[v0.3.12 release](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.12),
 or check for skin updates in Decaid using `Sabotage1/WorkFlow-Skin`.

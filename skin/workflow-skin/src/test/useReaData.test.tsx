@@ -105,6 +105,64 @@ describe("useReaData", () => {
     await act(async () => releaseBeans?.());
   });
 
+  it("loads the boot workflow without waiting for optional display information", async () => {
+    const api = createApi();
+    let releaseDisplay!: () => void;
+    api.getDisplay.mockImplementation(() => new Promise((resolve) => { releaseDisplay = () => resolve(null); }));
+    api.getMachineState.mockResolvedValue({ connected: true, state: { state: "idle" } });
+    const { result } = renderHook(() => useReaData(api as never));
+    try {
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      expect(result.current.machineState).toMatchObject({ state: { state: "idle" } });
+    } finally {
+      await act(async () => { releaseDisplay(); });
+    }
+  });
+
+  it("does not replace a confirmed preset with an older workflow refresh response", async () => {
+    const api = createApi();
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    let releaseWorkflow!: () => void;
+    api.getWorkflow.mockImplementation(() => new Promise((resolve) => { releaseWorkflow = () => resolve({ profile: { title: "Old preset" } }); }));
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refreshWorkflow(); });
+    act(() => { result.current.setWorkflow({ profile: { title: "Startup preset" } }); });
+    await act(async () => { releaseWorkflow(); await refresh; });
+    expect(result.current.workflow).toMatchObject({ profile: { title: "Startup preset" } });
+  });
+
+  it("publishes a new machine connection while display refresh is still pending", async () => {
+    const api = createApi();
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    let releaseDisplay!: () => void;
+    api.getDisplay.mockImplementation(() => new Promise((resolve) => { releaseDisplay = () => resolve(null); }));
+    api.getMachineState.mockResolvedValue({ connected: true, state: { state: "idle" } });
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refreshConnectivity(); });
+    try {
+      await waitFor(() => expect(result.current.machineState).toMatchObject({ connected: true }));
+    } finally {
+      await act(async () => { releaseDisplay(); await refresh; });
+    }
+  });
+
+  it("keeps the confirmed workflow when an earlier full history refresh finishes later", async () => {
+    const api = createApi();
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    let releaseBeans!: () => void;
+    api.getWorkflow.mockResolvedValue({ profile: { title: "Old preset" } });
+    api.listBeans.mockImplementation(() => new Promise((resolve) => { releaseBeans = () => resolve([]); }));
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refresh(); });
+    await flushPromises();
+    act(() => result.current.setWorkflow({ profile: { title: "Startup preset" } }));
+    await act(async () => { releaseBeans(); await refresh; });
+    expect(result.current.workflow).toMatchObject({ profile: { title: "Startup preset" } });
+  });
+
   it("keeps machine data available without a visible error when shot history fails", async () => {
     const api = createApi();
     api.getMachineState.mockResolvedValue({ connected: true, state: { state: "idle" } });
