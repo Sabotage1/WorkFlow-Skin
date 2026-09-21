@@ -2788,17 +2788,151 @@ describe("App shell", () => {
     expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
   });
 
-  it("withdraws sleep confirmation if the machine wakes while the screensaver remains open", async () => {
+  it("restores the screen and startup preset after Home Assistant wakes a confirmed sleeping machine", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, autoSleepMinutes: 1, startupProfileId: "p2",
+      keepScreenAwake: true, screensaverBrightness: 8,
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile } });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sleep machine" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    vi.useFakeTimers();
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(65_000));
+    const scansBeforeWake = fetchState.scanCount;
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sweet Classic" })).toHaveAttribute("aria-current", "true");
+    expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } });
+    expect(fetchState.displayState).toMatchObject({ brightness: 100, wakeLockOverride: true });
+    expect(fetchState.scanCount).toBeGreaterThan(scansBeforeWake);
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
+    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+  });
+
+  it("checks an external wake from live telemetry without waiting for the screensaver poll", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow Home Assistant wake test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await screen.findByRole("heading", { name: "Brew" });
+    const machine = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    const emitMode = (state: string) => machine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state } }) }));
+    act(() => emitMode("idle"));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    act(() => emitMode("sleeping"));
+    // A stale idle frame alone must not dismiss a machine still asleep in REST.
+    await act(async () => emitMode("idle"));
+    expect(screen.getByRole("button", { name: "Tap the screen to wake" })).toBeInTheDocument();
+    act(() => emitMode("sleeping"));
+    fetchState.setMachineState({ connected: true, state: { state: "idle", substate: "heating" } });
+    act(() => emitMode("idle"));
+    await screen.findByRole("heading", { name: "Brew" });
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("keeps the screensaver when a sleeping machine becomes disconnected or its state is unknown", async () => {
     const fetchState = mockReaFetch(initialSettings);
     render(<App />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Sleep machine" })).toBeEnabled());
     vi.useFakeTimers();
     await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
     expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
-    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    fetchState.setMachineState({ connected: false, state: { state: "idle" } });
     await act(async () => vi.advanceTimersByTimeAsync(5100));
     expect(screen.getByText("Sleep not confirmed")).toBeInTheDocument();
-    expect(screen.queryByText("Machine sleeping")).not.toBeInTheDocument();
+    fetchState.setMachineState({ connected: true });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("button", { name: "Tap the screen to wake" })).toBeInTheDocument();
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+  });
+
+  it("restores an external wake on resume while machine telemetry reconnects", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow Home Assistant wake test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile } });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Brew" });
+    const machine = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    const emitMode = (state: string) => machine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state } }) }));
+    act(() => emitMode("idle"));
+    await userEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sleep machine" }));
+    await screen.findByText("Machine sleeping");
+    await act(async () => emitMode("sleeping"));
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => window.dispatchEvent(new Event("pageshow")));
+    await screen.findByRole("heading", { name: "Brew" });
+    await waitFor(() => expect(fetchState.workflow).toMatchObject({ profile: { title: "Classic" } }));
+    const reconnectedMachine = AppFakeWebSocket.instances.slice().reverse().find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    await act(async () => reconnectedMachine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state: "idle" } }) })));
+    expect(screen.getByRole("button", { name: /^State$/ })).toHaveAttribute("title", expect.stringContaining("Idle"));
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("discards a previous external-wake read when a newer sleep request starts", async () => {
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sleep machine" })).toBeEnabled());
+    vi.useFakeTimers();
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let resolveOldRead!: () => void;
+    const oldRead = new Promise<void>((resolve) => { resolveOldRead = resolve; });
+    let intercepted = false;
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (!intercepted && String(input).endsWith("/machine/state")) {
+        intercepted = true;
+        return oldRead.then(() => responseJson({ connected: true, state: { state: "idle" } }));
+      }
+      return originalFetch(input, init);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(intercepted).toBe(true);
+    await act(async () => { screen.getByRole("button", { name: "Tap the screen to wake" }).click(); });
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    await act(async () => { resolveOldRead(); });
+    expect(screen.getByRole("button", { name: "Tap the screen to wake" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Brew" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the screensaver without interrupting a brew started after an external wake", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p2",
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[1].profile } });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    vi.useFakeTimers();
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    fetchState.setMachineState({ connected: true, state: { state: "espresso", substate: "pouring" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+    expect(fetchState.workflow).toMatchObject({ profile: { title: "Blooming" } });
+    expect(fetchState.workflowUpdateCount).toBe(1);
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
   });
 
   it("wakes after an earlier pending sleep command settles without returning to the screensaver", async () => {

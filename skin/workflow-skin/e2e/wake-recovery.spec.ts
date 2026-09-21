@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-for (const blockedPeripherals of [false, true]) {
-  test(blockedPeripherals
-    ? "boots and restores the startup preset while display and wake discovery are stalled"
-    : "restores the startup profile after a sleeping Decaid 0.8.5 gateway reconnects", async ({ page }, testInfo) => {
+const scenarios = [
+  { name: "restores the startup profile after a sleeping Decaid 0.8.5 gateway reconnects", blockedPeripherals: false, externalWake: "" },
+  { name: "boots and restores the startup preset while display and wake discovery are stalled", blockedPeripherals: true, externalWake: "" },
+  { name: "leaves the screensaver when Home Assistant wakes Decaid 0.8.6 through live telemetry", blockedPeripherals: false, externalWake: "telemetry" },
+  { name: "detects a Home Assistant wake through REST when sleeping telemetry stops", blockedPeripherals: false, externalWake: "poll" }
+];
+
+for (const { name, blockedPeripherals, externalWake } of scenarios) {
+  test(name, async ({ page }, testInfo) => {
     let releasePeripherals!: () => void;
     const peripheralGate = new Promise<void>((resolve) => { releasePeripherals = resolve; });
     const profiles = ["Light", "Sweet"].map((title, index) => ({
@@ -17,13 +22,19 @@ for (const blockedPeripherals of [false, true]) {
     let mode = "idle";
     let waking = false;
     let attempts = 0;
+    let skinWakeRequests = 0;
+    let brightness = 100;
+    let wakeLock = true;
     const settings = { startupProfileId: "p2", presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }],
       shownProfileIds: ["p1", "p2"], defaultReviewEnabled: true, autoSleepMinutes: 0 };
 
     await page.routeWebSocket("**/ws/v1/**", (socket) => {
       let timer: ReturnType<typeof setInterval> | undefined;
       if (socket.url().endsWith("/machine/snapshot")) {
-        const send = () => socket.send(JSON.stringify({ timestamp: new Date().toISOString(), state: { state: mode, substate: "idle" }, groupTemperature: 93 }));
+        const send = () => {
+          if (externalWake === "poll" && waking) return;
+          socket.send(JSON.stringify({ timestamp: new Date().toISOString(), state: { state: mode, substate: "idle" }, groupTemperature: 93 }));
+        };
         send();
         timer = setInterval(send, 250);
       } else if (socket.url().endsWith("/scale/snapshot")) socket.send(JSON.stringify({ status: "disconnected" }));
@@ -39,8 +50,8 @@ for (const blockedPeripherals of [false, true]) {
         if (method === "PUT") {
           if (waking) {
             attempts++;
-            if (!blockedPeripherals && attempts === 1) { await route.abort("failed"); return; }
-            if (!blockedPeripherals && attempts === 2) { await route.fulfill({ status: 503, json: { error: "Machine unavailable" } }); return; }
+            if (!blockedPeripherals && !externalWake && attempts === 1) { await route.abort("failed"); return; }
+            if (!blockedPeripherals && !externalWake && attempts === 2) { await route.fulfill({ status: 503, json: { error: "Machine unavailable" } }); return; }
           }
           const patch = request.postDataJSON();
           workflow = { ...workflow, ...patch, context: { ...workflow.context, ...patch.context } };
@@ -48,13 +59,15 @@ for (const blockedPeripherals of [false, true]) {
         body = workflow;
       } else if (path === "/api/v1/machine/state/sleeping") mode = "sleeping";
       else if (path === "/api/v1/machine/state/idle") {
+        skinWakeRequests++;
         mode = "idle";
         waking = true;
         workflow = { ...workflow, profile: profiles[0].profile, context: contextFor("p1") };
       } else if (path === "/api/v1/machine/state") body = { state: { state: mode, substate: "idle" }, groupTemperature: 93 };
-      else if (path === "/api/v1/info") body = { version: "0.8.5", fullVersion: "0.8.5" };
+      else if (path === "/api/v1/info") body = { version: externalWake ? "0.8.6" : "0.8.5" };
       else if (path === "/api/v1/settings") body = { gatewayMode: "tracking" };
-      else if (path === "/api/v1/display/brightness") body = { brightness: request.postDataJSON().brightness };
+      else if (path === "/api/v1/display/brightness") { brightness = request.postDataJSON().brightness; body = { brightness }; }
+      else if (path === "/api/v1/display/wakelock") { wakeLock = method === "POST"; body = { wakeLockOverride: wakeLock }; }
       else if (path.startsWith("/api/v1/display")) {
         if (blockedPeripherals && path === "/api/v1/display") await peripheralGate;
         body = { brightness: 100, wakeLockOverride: false };
@@ -78,14 +91,26 @@ for (const blockedPeripherals of [false, true]) {
       await page.getByRole("button", { name: "Sleep machine" }).click();
       await expect(page.getByRole("button", { name: "Tap the screen to wake" })).toBeVisible();
       await expect.poll(() => mode).toBe("sleeping");
-      await page.getByRole("button", { name: "Tap the screen to wake" }).click();
-      await expect(page.getByRole("heading", { name: "Brew", exact: true })).toBeVisible();
-      await expect.poll(() => attempts, { timeout: 15000 }).toBe(blockedPeripherals ? 1 : 3);
+      await expect(page.getByText("Machine sleeping", { exact: true })).toBeVisible();
+      await expect.poll(() => brightness).toBe(8);
+      if (externalWake) {
+        // Only the simulated native machine changes, as with Home Assistant.
+        // No screen tap or skin-issued wake request initiates this transition.
+        mode = "idle";
+        waking = true;
+      } else {
+        await page.getByRole("button", { name: "Tap the screen to wake" }).click();
+      }
+      await expect(page.getByRole("heading", { name: "Brew", exact: true })).toBeVisible({ timeout: 7500 });
+      await expect.poll(() => attempts, { timeout: 15000 }).toBe(blockedPeripherals || externalWake ? 1 : 3);
       await expect.poll(() => workflow.context.extras.workflowSkin.selectedProfileId).toBe("p2");
       await expect(page.getByRole("button", { name: "Sweet Sweet", exact: true })).toHaveAttribute("aria-current", "true");
       await expect(page.getByRole("button", { name: "Light Light", exact: true })).not.toHaveAttribute("aria-current", "true");
       await expect(page.getByText(/Could not apply startup profile/)).toHaveCount(0);
       await expect(page.getByText("Machine sleep requested.", { exact: true })).toHaveCount(0);
+      await expect.poll(() => brightness).toBe(100);
+      await expect.poll(() => wakeLock).toBe(true);
+      expect(skinWakeRequests).toBe(externalWake ? 0 : 1);
       expect(workflow.context.targetYield).toBe(36);
       expect(workflow.steamSettings.targetTemperature).toBe(150);
       await page.screenshot({ path: testInfo.outputPath("wake-recovered.png"), fullPage: true });
