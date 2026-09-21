@@ -1,13 +1,15 @@
 import { expect, test } from "@playwright/test";
 
-const scenarios = [
+const scenarios: { name: string; blockedPeripherals: boolean; externalWake: string; externalSleep?: string }[] = [
   { name: "restores the startup profile after a sleeping Decaid 0.8.5 gateway reconnects", blockedPeripherals: false, externalWake: "" },
   { name: "boots and restores the startup preset while display and wake discovery are stalled", blockedPeripherals: true, externalWake: "" },
   { name: "leaves the screensaver when Home Assistant wakes Decaid 0.8.6 through live telemetry", blockedPeripherals: false, externalWake: "telemetry" },
-  { name: "detects a Home Assistant wake through REST when sleeping telemetry stops", blockedPeripherals: false, externalWake: "poll" }
+  { name: "detects a Home Assistant wake through REST when sleeping telemetry stops", blockedPeripherals: false, externalWake: "poll" },
+  { name: "synchronizes Apple Home sleep and external wake from the settings page", blockedPeripherals: false, externalSleep: "telemetry", externalWake: "telemetry" },
+  { name: "detects Apple Home sleep without telemetry and supports waking by screen tap", blockedPeripherals: false, externalSleep: "poll", externalWake: "" }
 ];
 
-for (const { name, blockedPeripherals, externalWake } of scenarios) {
+for (const { name, blockedPeripherals, externalWake, externalSleep } of scenarios) {
   test(name, async ({ page }, testInfo) => {
     let releasePeripherals!: () => void;
     const peripheralGate = new Promise<void>((resolve) => { releasePeripherals = resolve; });
@@ -23,6 +25,7 @@ for (const { name, blockedPeripherals, externalWake } of scenarios) {
     let waking = false;
     let attempts = 0;
     let skinWakeRequests = 0;
+    let skinSleepRequests = 0;
     let brightness = 100;
     let wakeLock = true;
     const settings = { startupProfileId: "p2", presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }],
@@ -33,6 +36,7 @@ for (const { name, blockedPeripherals, externalWake } of scenarios) {
       if (socket.url().endsWith("/machine/snapshot")) {
         const send = () => {
           if (externalWake === "poll" && waking) return;
+          if (externalSleep === "poll" && mode === "sleeping") return;
           socket.send(JSON.stringify({ timestamp: new Date().toISOString(), state: { state: mode, substate: "idle" }, groupTemperature: 93 }));
         };
         send();
@@ -57,7 +61,7 @@ for (const { name, blockedPeripherals, externalWake } of scenarios) {
           workflow = { ...workflow, ...patch, context: { ...workflow.context, ...patch.context } };
         }
         body = workflow;
-      } else if (path === "/api/v1/machine/state/sleeping") mode = "sleeping";
+      } else if (path === "/api/v1/machine/state/sleeping") { skinSleepRequests++; mode = "sleeping"; }
       else if (path === "/api/v1/machine/state/idle") {
         skinWakeRequests++;
         mode = "idle";
@@ -88,11 +92,19 @@ for (const { name, blockedPeripherals, externalWake } of scenarios) {
       await expect.poll(() => workflow.context.extras.workflowSkin.selectedProfileId).toBe("p2");
       await page.getByRole("button", { name: "Light Light", exact: true }).click();
       await expect.poll(() => workflow.context.extras.workflowSkin.selectedProfileId).toBe("p1");
-      await page.getByRole("button", { name: "Sleep machine" }).click();
-      await expect(page.getByRole("button", { name: "Tap the screen to wake" })).toBeVisible();
+      if (externalSleep) {
+        await page.getByRole("button", { name: "Settings", exact: true }).click();
+        mode = "sleeping";
+      } else {
+        await page.getByRole("button", { name: "Sleep machine" }).click();
+      }
+      await expect(page.getByRole("button", { name: "Tap the screen to wake" })).toBeVisible({ timeout: 7500 });
       await expect.poll(() => mode).toBe("sleeping");
       await expect(page.getByText("Machine sleeping", { exact: true })).toBeVisible();
       await expect.poll(() => brightness).toBe(8);
+      await expect.poll(() => wakeLock).toBe(false);
+      expect(skinSleepRequests).toBe(externalSleep ? 0 : 1);
+      if (externalSleep) await page.screenshot({ path: testInfo.outputPath("apple-home-sleep.png"), fullPage: true });
       if (externalWake) {
         // Only the simulated native machine changes, as with Home Assistant.
         // No screen tap or skin-issued wake request initiates this transition.

@@ -837,7 +837,6 @@ export function App() {
   const lastLoggedPageRef = useRef<Page | null>(null);
   const lastLoggedMachineModeRef = useRef<string | null>(null);
   const wasSleepingRef = useRef<boolean | null>(null);
-  const wakeScreenStartupResetUntilRef = useRef(0);
   const drinkWorkflowRunTokenRef = useRef(0);
   const drinkWorkflowBusyRef = useRef(false);
   const scaleReconnectRef = useRef<{ signature: string | null; lastAttemptAt: number; pending: boolean }>({
@@ -2521,19 +2520,9 @@ export function App() {
       // during an explicit wake belongs to that wake, not a new sleep cycle.
       sleepGenerationRef.current += 1;
     }
-    if (wasSleeping !== true || machineSleeping) return;
-
-    if (Date.now() <= wakeScreenStartupResetUntilRef.current) {
-      wakeScreenStartupResetUntilRef.current = 0;
-      return;
-    }
-
-    // The screensaver monitor confirms external wakes with a fresh REST read
-    // before restoring the screen; a delayed idle snapshot is insufficient.
-    if (page === "screensaver") return;
-    resetStartupProfileApply(true);
-    void runStartupRecovery({ recoverDevices: true }).catch(() => undefined);
-  }, [currentMachineMode, data.loaded, machineConnected, machineSleeping, page, resetStartupProfileApply, runStartupRecovery]);
+    // Confirmed sleep/wake transitions are handled by the shared state monitor.
+    // This early guard only retires recovery as sleeping telemetry arrives.
+  }, [currentMachineMode, data.loaded, machineConnected, machineSleeping]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
@@ -2840,17 +2829,26 @@ export function App() {
     });
   }, [api, data.settings.screensaverBrightness]);
 
-  const sleepMachine = useCallback(async () => {
+  const sleepMachine = useCallback(async (confirmedSleepState?: MachineState) => {
     if (sleepCommandRef.current) return;
     const generation = ++sleepGenerationRef.current;
     const isCurrent = () => startupMountedRef.current && sleepGenerationRef.current === generation;
     machineSleepRequestedRef.current = true;
     sleepConfirmedRef.current = false;
-    wakeScreenStartupResetUntilRef.current = 0;
     wakeMachinePendingRef.current = false;
     setSleepPending(true);
     setSleepStatus("pending");
     setPage("screensaver");
+    if (confirmedSleepState) {
+      // Apple Home already put the machine to sleep. Mirror that confirmed
+      // state in the skin without issuing a second machine command.
+      sleepConfirmedRef.current = true;
+      setFastMachineState(confirmedSleepState);
+      setSleepStatus("confirmed");
+      setSleepPending(false);
+      sleepDisplayRef.current = applyScreensaverDisplay(isCurrent);
+      return;
+    }
     // Send the machine command before optional display APIs; dimming must not
     // delay or prevent the heater sleep request.
     const command = api.sleepMachine();
@@ -2907,7 +2905,6 @@ export function App() {
     lastUseAtRef.current = now;
     lastUseStateAtRef.current = now;
     setLastUseAt(now);
-    wakeScreenStartupResetUntilRef.current = now + 15_000;
     setPage("brew");
     setStatus(null);
     // An earlier sleep command must settle before sending wake.
@@ -2934,16 +2931,24 @@ export function App() {
         setStartupApplyTick((tick) => tick + 1);
       }
     }
-    if (isCurrent()) await runStartupRecovery({ recoverDevices: true });
+    if (isCurrent()) {
+      const recoverDevices = startupConnectRef.current;
+      // A skin loaded while the machine slept has not run initial discovery.
+      // Claim that first scan here so the startup effect cannot duplicate it.
+      startupConnectRef.current = true;
+      await runStartupRecovery({ recoverDevices });
+    }
   }, [api, data.machineState, data.settings.keepScreenAwake, resetStartupProfileApply, runStartupRecovery]);
 
   useEffect(() => {
-    if (page !== "screensaver" || sleepPending) return;
+    if (!data.loaded || sleepPending) return;
+    const screenSleeping = page === "screensaver";
     const generation = sleepGenerationRef.current;
     let cancelled = false;
     let checking = false;
     const isCurrent = () => !cancelled && startupMountedRef.current &&
-      machineSleepRequestedRef.current && sleepGenerationRef.current === generation;
+      !wakeMachinePendingRef.current && machineSleepRequestedRef.current === screenSleeping &&
+      sleepGenerationRef.current === generation;
     const check = async () => {
       if (checking || !isCurrent()) return;
       checking = true;
@@ -2951,6 +2956,12 @@ export function App() {
         const state = await api.getMachineState(3000).catch(() => null);
         if (!isCurrent()) return;
         const sleeping = Boolean(state && state.connected !== false && isSleepingMachine(state));
+        if (!screenSleeping) {
+          if (sleeping && state) void sleepMachine(state).catch((error) => {
+            skinLog("external_sleep_recovery_failed", { error: errorMessage(error) });
+          });
+          return;
+        }
         if (sleeping) sleepConfirmedRef.current = true;
         if (sleepConfirmedRef.current && state && state.connected !== false && state.state?.state && !sleeping) {
           void wakeScreen(state).catch((error) => {
@@ -2967,7 +2978,7 @@ export function App() {
     const requestCheck = () => { void check(); };
     const handleVisibilityChange = () => { if (document.visibilityState !== "hidden") requestCheck(); };
     // Check promptly on live mode changes or WebView resume. Polling also
-    // detects Home Assistant wakes when machine telemetry has stopped.
+    // detects Apple Home sleep and Home Assistant wake without telemetry.
     requestCheck();
     const timer = window.setInterval(requestCheck, 5000);
     window.addEventListener("focus", requestCheck);
@@ -2982,7 +2993,7 @@ export function App() {
       window.removeEventListener("online", requestCheck);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [api, page, sleepPending, liveMachineState?.state, wakeScreen]);
+  }, [api, data.loaded, page, sleepPending, liveMachineState?.state, sleepMachine, wakeScreen]);
 
   useEffect(() => {
     if (!data.loaded || page === "screensaver" || !machineConnected) return;

@@ -6,12 +6,12 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.3.13](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.3.13)
+- [WorkFlow Skin v0.4.0](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.0)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
-Version 0.3.13 automatically leaves the screensaver when Home Assistant wakes the machine, restoring brightness, the idle timer, and the startup preset. It retains confirmed sleep and immediate Review, including shots without a scale. See the
-[external wake validation report](docs/home-assistant-wake-0.3.13.md) for Decaid 0.8.5 and 0.8.6 checks, and the [existing compatibility report](docs/decaid-0.8.5-compatibility.md) for feature coverage.
+Version 0.4.0 synchronizes the skin with external machine sleep and wake. Apple Home sleep enters the screensaver and dims the display; Home Assistant wake restores brightness, the idle timer, and the startup preset. It retains confirmed sleep and immediate Review, including shots without a scale. See the
+[sleep/wake validation report](docs/external-sleep-wake-0.4.0.md) for Decaid 0.8.5 and 0.8.6 checks, and the [existing compatibility report](docs/decaid-0.8.5-compatibility.md) for feature coverage.
 
 ## Screenshots
 
@@ -358,4 +358,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.3.13 restores the skin after Home Assistant wakes the machine. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.4.0 synchronizes Apple Home sleep and Home Assistant wake with the skin's display and startup state. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.

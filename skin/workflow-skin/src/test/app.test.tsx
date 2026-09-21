@@ -2693,6 +2693,90 @@ describe("App shell", () => {
     expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
   });
 
+  it("enters the screensaver after Apple Home puts the machine to sleep from settings", async () => {
+    const fetchState = mockReaFetch({ ...initialSettings, screensaverBrightness: 11 });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    vi.useFakeTimers();
+    fetchState.setMachineState({ connected: true, state: { state: "sleeping" } });
+    await act(async () => window.dispatchEvent(new Event("pageshow")));
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+    expect(fetchState.displayState).toMatchObject({ brightness: 11, wakeLockOverride: false });
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/sleeping", expect.objectContaining({ method: "PUT" })
+    );
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(fetchState.displayState).toMatchObject({ brightness: 100, wakeLockOverride: true });
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("confirms an Apple Home sleep from live telemetry before dimming the skin", async () => {
+    AppFakeWebSocket.instances = [];
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "WorkFlow Apple Home sleep test" });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: AppFakeWebSocket });
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await screen.findByRole("heading", { name: "Brew" });
+    const machine = AppFakeWebSocket.instances.find((socket) => socket.url.endsWith("/machine/snapshot"))!;
+    const emitMode = (state: string) => machine.emit("message", new MessageEvent("message", { data: JSON.stringify({ state: { state } }) }));
+    await act(async () => emitMode("idle"));
+    // A stale sleep frame must not dim an awake machine.
+    await act(async () => emitMode("sleeping"));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(fetchState.displayState.brightness).toBe(100);
+    await act(async () => emitMode("idle"));
+    fetchState.setMachineState({ connected: true, state: { state: "sleeping" } });
+    await act(async () => emitMode("sleeping"));
+    await screen.findByText("Machine sleeping");
+    expect(fetchState.fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/state/sleeping", expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("polls for Apple Home sleep without live telemetry and ignores disconnected or missing state", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    fetchState.setMachineState({ connected: false, state: { state: "sleeping" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    fetchState.setMachineState({ connected: true });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    fetchState.setMachineState({ connected: true, state: { state: "sleeping" } });
+    await act(async () => vi.advanceTimersByTimeAsync(5100));
+    expect(screen.getByText("Machine sleeping")).toBeInTheDocument();
+  });
+
+  it("discards an old Apple Home sleep read after the user starts waking the machine", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    const originalFetch = fetchState.fetchMock.getMockImplementation()!;
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let intercepted = false;
+    fetchState.fetchMock.mockImplementation((input, init) => {
+      if (!intercepted && String(input).endsWith("/machine/state")) {
+        intercepted = true;
+        return readGate.then(() => responseJson({ connected: true, state: { state: "sleeping" } }));
+      }
+      return originalFetch(input, init);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    await act(async () => { screen.getByRole("button", { name: "Sleep machine" }).click(); });
+    await act(async () => { screen.getByRole("button", { name: "Tap the screen to wake" }).click(); });
+    await act(async () => { releaseRead(); await vi.advanceTimersByTimeAsync(300); });
+    expect(screen.getByRole("heading", { name: "Brew" })).toBeInTheDocument();
+    expect(fetchState.displayState.brightness).toBe(100);
+  });
+
   it("puts the machine to sleep and moves into screensaver mode", async () => {
     const fetchState = mockReaFetch({ ...initialSettings, keepScreenAwake: true, screensaverBrightness: 8 } as SkinSettings);
     render(<App />);
