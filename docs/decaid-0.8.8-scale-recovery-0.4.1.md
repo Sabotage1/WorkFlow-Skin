@@ -15,8 +15,8 @@ inactive during the discovery burst. This is direct evidence of the old skin's
 discovery competing with the host's scale recovery. It explains why returning
 to the native app, which owns automatic connection, can recover the scale.
 
-This snapshot proves the scan conflict. A successful installed-hardware
-connection must be recorded separately after the update.
+This snapshot proves the scan conflict. The installed-hardware result below
+was recorded separately after the update.
 
 ## Changes
 
@@ -94,7 +94,28 @@ were implemented in this correction.
 - Production build and ZIP integrity passed. Package, lockfile and embedded
   manifest all identify **0.4.1**.
 - Tablet API inspection is live evidence; the automated gateway tests are
-  simulated. Physical scale connection, scale power cycling and brewing/weight
-  stop require their own installed-tablet confirmation.
+  simulated. The physical connection/power-cycle check is recorded below.
+  Brewing/weight stop and R2 measurements were not physically exercised.
 
 Local installable artifact: `workflow-skin.zip` at the repository root.
+
+## Published release and installed hardware confirmation
+
+[WorkFlow 0.4.1](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.1)
+was published from commit `265632b`. The freshly downloaded release ZIP
+matches the local tested artifact:
+
+`sha256:bd58b5a5c164f0f6608a29988642b273f655ebe08463079a9f6f177624a397f4`
+
+The tablet's install API confirmed success through the existing GitHub release
+source, and its installed manifest reports 0.4.1. The JavaScript bundle served
+by the tablet matches the local release build byte for byte.
+
+The user confirmed that v0.4.1 was open and the Bookoo Mini had been powered
+off and back on without leaving the skin for the connection check. At
+**23:33:31 on 2026-10-14, Asia/Jerusalem**, the live primary scale WebSocket
+reported connected and the native device inventory assigned it the `primary`
+role. Actual weight readings followed, including 0, 15.69 and 48.5 grams as
+weight changed on the scale. The stream remained active through the observation
+window ending at 23:34:07. No brewing command or programmatic scale connection
+was issued by the diagnostic observer during this check.
