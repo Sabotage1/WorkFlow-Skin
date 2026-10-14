@@ -47,6 +47,7 @@ import type { CommunityRecommendation, DownloadedCommunityProfile, UploadedCommu
 import type { Bag } from "./lib/bags";
 import { buildConnectivityStatuses } from "./lib/connectivity";
 import type { ConnectivityStatus } from "./lib/connectivity";
+import { isPrimaryScaleCandidate, supportsEarlyScaleReconnect, usesNativeScaleRecovery } from "./lib/scaleConnection";
 import {
   DrinkWorkflowCanceledError,
   runDrinkWorkflow as executeDrinkWorkflow
@@ -148,6 +149,15 @@ interface TopStatusIndicator {
   label: string;
   detail: string;
   connected: boolean;
+}
+
+interface ScaleConnectionResult {
+  connected: boolean;
+  requested: boolean;
+  found: boolean;
+  firstError: unknown;
+  pending?: boolean;
+  canceled?: boolean;
 }
 
 const navById: Record<MainMenuItemId, { label: string; icon: React.ComponentType<{ className?: string; size?: number }> }> = {
@@ -324,20 +334,7 @@ function deviceLabel(device: DeviceInfo): string {
 }
 
 function isScaleDeviceCandidate(device: DeviceInfo): boolean {
-  const label = deviceLabel(device);
-  return (
-    device.type === "scale" ||
-    label.includes("scale") ||
-    label.includes("microbalance") ||
-    label.includes("acaia") ||
-    label.includes("hiroia") ||
-    label.includes("lunar") ||
-    label.includes("pearl") ||
-    label.includes("felicita") ||
-    label.includes("bookoo") ||
-    label.includes("boo koo") ||
-    label.includes("decent scale")
-  );
+  return isPrimaryScaleCandidate(device);
 }
 
 function isConnectedDevice(device: DeviceInfo): boolean {
@@ -844,6 +841,9 @@ export function App() {
     lastAttemptAt: 0,
     pending: false
   });
+  const managedScaleScanRef = useRef<{ lastStartedAt: number; pending: Promise<DeviceInfo[]> | null }>({ lastStartedAt: -Infinity, pending: null });
+  const [scaleRecoveryTick, setScaleRecoveryTick] = useState(0);
+  const scaleConnectionRequestRef = useRef<{ generation: number; promise: Promise<ScaleConnectionResult> } | null>(null);
   const gatewayModeCheckRef = useRef(false);
   const gatewayModeUpdateRef = useRef(false);
   const api = useMemo(() => new ReaPrimeApi(), []);
@@ -853,7 +853,9 @@ export function App() {
   const scaleLiveConnectedRef = useRef(liveTelemetry.scaleConnected);
   scaleLiveConnectedRef.current = liveTelemetry.scaleConnected;
   const latestShot = data.shots[0] ?? null;
-  const nativeDevices = data.devices ?? [];
+  const nativeDevices = liveTelemetry.deviceState?.devices ?? data.devices ?? [];
+  const nativeDeviceStateRef = useRef(liveTelemetry.deviceState);
+  nativeDeviceStateRef.current = liveTelemetry.deviceState;
   const detectedR2Sensor = findDifluidR2Sensor(data.sensors);
   const configuredR2Sensor = data.settings.r2SensorId ? data.sensors.find((sensor) => sensor.id === data.settings.r2SensorId) ?? null : null;
   const r2Sensor = configuredR2Sensor ?? detectedR2Sensor;
@@ -926,6 +928,8 @@ export function App() {
       ? ({ ...(data.machineState ?? {}), ...fastMachineState, waterLevels: fastMachineState.waterLevels ?? data.machineState?.waterLevels } as MachineState)
       : data.machineState;
   const currentMachineMode = resolvedMachineMode.state;
+  const currentMachineModeRef = useRef(currentMachineMode);
+  currentMachineModeRef.current = currentMachineMode;
   const drinkWorkflowBusy =
     drinkWorkflowRun.phase === "preparing" ||
     drinkWorkflowRun.phase === "starting" ||
@@ -1373,6 +1377,38 @@ export function App() {
     return result;
   }, []);
 
+  const scanForManagedScale = useCallback(async (version: string | undefined, includeSensors = false) => {
+    // The native inventory socket can arrive just after the core boot reads.
+    // Give its initial ownership snapshot a chance to arrive before discovery.
+    for (let attempt = 0; attempt < 5 && !nativeDeviceStateRef.current; attempt += 1) await waitForNativeUpdate(100);
+    if (machineSleepRequestedRef.current || (currentMachineModeRef.current && !isIdleMode(currentMachineModeRef.current))) return api.listDevices();
+    const machine = await api.getMachineState().catch(() => null);
+    if (machine?.state?.state && !isIdleMode(machine.state.state)) return api.listDevices();
+    if (scaleLiveConnectedRef.current && !includeSensors) return api.listDevices();
+    const state = managedScaleScanRef.current;
+    if (state.pending) return state.pending;
+    // Native discovery and its post-wake watch can outlive the HTTP response.
+    // Joining recovery must not restart discovery or steal its BLE ownership.
+    const nativeState = nativeDeviceStateRef.current;
+    if (!includeSensors && nativeState && hasConnectedScale(nativeState.devices)) return api.listDevices();
+    const age = Date.now() - state.lastStartedAt;
+    const busy = !nativeState || nativeState.scanning || ["scanning", "connectingMachine", "connectingScale"].includes(nativeState.phase ?? "");
+    if (nativeState && busy) return api.listDevices();
+    if (age < 60_000 && (busy || age < 2000)) return api.listDevices();
+    state.lastStartedAt = Date.now();
+    const scan = api.scanDevices({
+      connect: true,
+      quick: !includeSensors,
+      ...(!includeSensors && supportsEarlyScaleReconnect(version) ? { connectPreferredScaleEarly: true } : {})
+    });
+    state.pending = scan;
+    try {
+      return await scan;
+    } finally {
+      if (state.pending === scan) state.pending = null;
+    }
+  }, [api]);
+
   const connectConfiguredStartupDevices = useCallback(async (
     options: { recovery?: boolean; preferredScaleId?: string | null; singleAttempt?: boolean } = {}
   ) => {
@@ -1383,7 +1419,12 @@ export function App() {
       if (delay > 0) await waitForNativeUpdate(delay);
       const ready = await enqueueDeviceConnection(async () => {
         if (!isCurrent()) return true;
-        const scannedDevices = await api.scanDevices({ connect: options.recovery !== true, quick: false }).catch((error) => {
+        const version = data.appInfo?.version ?? (await api.getAppInfo().catch(() => null))?.version;
+        const nativeRecovery = usesNativeScaleRecovery(version);
+        if (nativeRecovery && scaleLiveConnectedRef.current && !data.settings.r2SensorId) return true;
+        const scannedDevices = await (nativeRecovery
+          ? scanForManagedScale(version, Boolean(data.settings.r2SensorId))
+          : api.scanDevices({ connect: options.recovery !== true, quick: false })).catch((error) => {
           skinLog("startup_device_scan_failed", { recovery: options.recovery === true, error: errorMessage(error) });
           return [] as DeviceInfo[];
         });
@@ -1415,8 +1456,8 @@ export function App() {
             (isConfiguredR2Device(item, data.settings.r2SensorId) || (Boolean(data.settings.r2SensorId) && isR2Device(item)))
         );
         const startupCandidates = uniqueDevices([
-          ...(options.recovery !== true && disconnectedMachines.length === 1 ? disconnectedMachines : []),
-          ...scaleCandidates,
+          ...(!nativeRecovery && options.recovery !== true && disconnectedMachines.length === 1 ? disconnectedMachines : []),
+          ...(nativeRecovery ? [] : scaleCandidates),
           ...disconnectedR2
         ]);
         for (const device of startupCandidates) {
@@ -1443,7 +1484,7 @@ export function App() {
       });
       if (ready) break;
     }
-  }, [api, data.devices, data.settings.r2SensorId, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive, nativePreferredScaleId]);
+  }, [api, data.appInfo?.version, data.devices, data.settings.r2SensorId, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive, nativePreferredScaleId, scanForManagedScale]);
 
   const runStartupRecovery = useCallback(
     (options: { recoverDevices?: boolean } = {}) => {
@@ -2428,18 +2469,49 @@ export function App() {
 
   const requestScaleConnection = useCallback(async (
     options: { discoveryAttempts?: number; onDiscoveryRetry?: (attempt: number) => void; forceDiscovery?: boolean } = {}
-  ) => {
-    return enqueueDeviceConnection(async () => {
+  ): Promise<ScaleConnectionResult> => {
+    const generation = sleepGenerationRef.current;
+    if (scaleConnectionRequestRef.current?.generation === generation) return scaleConnectionRequestRef.current.promise;
+    const isCurrent = () => startupMountedRef.current && generation === sleepGenerationRef.current &&
+      !machineSleepRequestedRef.current && document.visibilityState !== "hidden" &&
+      !drinkWorkflowBusyRef.current && (!currentMachineModeRef.current || isIdleMode(currentMachineModeRef.current));
+    const request = enqueueDeviceConnection(async () => {
       const scaleReady = (devices: DeviceInfo[]) =>
-        hasConnectedScale(devices) &&
-        (!liveTelemetry.scaleVerificationActive || scaleLiveConnectedRef.current);
-      await wakeMachineIfNeeded(api, data.machineState, () => !machineSleepRequestedRef.current);
+        liveTelemetry.scaleVerificationActive ? scaleLiveConnectedRef.current : hasConnectedScale(devices);
+      if (!isCurrent()) throw new Error("Scale connection is paused while the machine is busy or sleeping.");
+      const version = data.appInfo?.version ?? (await api.getAppInfo().catch(() => null))?.version;
+      if (!usesNativeScaleRecovery(version)) await wakeMachineIfNeeded(api, data.machineState, () => !machineSleepRequestedRef.current);
       const initialDevices = (await api.listDevices().catch(() => data.devices ?? [])).filter(isAvailableDevice);
       if (scaleReady(initialDevices)) {
         await data.refreshConnectivity();
         return { connected: true, requested: false, found: true, firstError: null };
       }
 
+      if (usesNativeScaleRecovery(version)) {
+        if (!isCurrent()) throw new Error("Scale connection paused.");
+        skinLog("scale_native_recovery_started", { appVersion: version, preferredScaleId: nativePreferredScaleId ?? null });
+        await scanForManagedScale(version);
+        let devices = initialDevices;
+        // quick=true acknowledges the request before BLE discovery/connection.
+        // Observe the primary stream while the host owns selection, transport
+        // choice, scan teardown and reconnect. Never issue a competing PUT.
+        const deadline = Date.now() + 30_000;
+        for (let attempt = 0; attempt <= 60 && Date.now() <= deadline && isCurrent(); attempt += 1) {
+          if (attempt > 0) await waitForNativeUpdate(500);
+          if (!isCurrent()) break;
+          if (scaleReady(devices)) {
+            skinLog("scale_native_primary_confirmed", { appVersion: version });
+            void data.refreshConnectivity();
+            return { connected: true, requested: true, found: true, firstError: null };
+          }
+          devices = await api.listDevices().catch(() => devices);
+        }
+        void data.refreshConnectivity();
+        return { connected: isCurrent() && scaleReady(devices), requested: true,
+          found: Boolean(nativePreferredScaleId) || devices.some(isScaleDeviceCandidate), firstError: null, pending: isCurrent(), canceled: !isCurrent() };
+      }
+
+      if (!isCurrent()) throw new Error("Scale connection paused.");
       let requested = false;
       let firstError: unknown = null;
       let refreshedDevices = initialDevices;
@@ -2480,6 +2552,7 @@ export function App() {
       }
 
       for (const device of scaleDevices.filter((item) => !isConnectedDevice(item) || !scaleLiveConnectedRef.current)) {
+        if (!isCurrent()) break;
         try {
           await api.connectDevice(device.id);
           requested = true;
@@ -2508,7 +2581,13 @@ export function App() {
         firstError
       };
     });
-  }, [api, data.appInfo?.version, data.devices, data.machineState, data.refreshConnectivity, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive]);
+    scaleConnectionRequestRef.current = { generation, promise: request };
+    try {
+      return await request;
+    } finally {
+      if (scaleConnectionRequestRef.current?.promise === request) scaleConnectionRequestRef.current = null;
+    }
+  }, [api, data.appInfo?.version, data.devices, data.machineState, data.refreshConnectivity, enqueueDeviceConnection, liveTelemetry.scaleVerificationActive, nativePreferredScaleId, scanForManagedScale]);
 
   useEffect(() => {
     if (!data.loaded || !machineConnected || !currentMachineMode) return;
@@ -2525,20 +2604,29 @@ export function App() {
   }, [currentMachineMode, data.loaded, machineConnected, machineSleeping]);
 
   useEffect(() => {
+    if (!data.loaded || page === "screensaver" || machineSleeping || !isIdleMode(currentMachineMode)) return;
+    const timer = window.setInterval(() => setScaleRecoveryTick((tick) => tick + 1), 5000);
+    return () => window.clearInterval(timer);
+  }, [currentMachineMode, data.loaded, machineSleeping, page]);
+
+  useEffect(() => {
     if (!data.loaded || page === "screensaver" || machineSleeping) return;
+    if (document.visibilityState === "hidden" || machineSleepRequestedRef.current || drinkWorkflowBusyRef.current) return;
     if (!isIdleMode(currentMachineMode)) return;
     const disconnectedScales = disconnectedScaleDevices(nativeDevices);
     const knownScales = nativeDevices.filter((device) => isScaleDeviceCandidate(device) && !isR2Device(device));
     const missingFreshScale =
       liveTelemetry.scaleVerificationActive &&
       !liveTelemetry.scaleConnected &&
-      knownScales.length > 0;
-    if (!missingFreshScale && (disconnectedScales.length === 0 || hasConnectedScale(nativeDevices))) {
+      (knownScales.length > 0 || Boolean(nativePreferredScaleId));
+    const preferredScaleMissing = Boolean(nativePreferredScaleId) && !hasConnectedScale(nativeDevices);
+    if ((liveTelemetry.scaleVerificationActive && liveTelemetry.scaleConnected) ||
+      (!missingFreshScale && !preferredScaleMissing && (disconnectedScales.length === 0 || hasConnectedScale(nativeDevices)))) {
       scaleReconnectRef.current.signature = null;
       return;
     }
 
-    const signature = deviceIdSignature(disconnectedScales.length > 0 ? disconnectedScales : knownScales);
+    const signature = deviceIdSignature(disconnectedScales.length > 0 ? disconnectedScales : knownScales) || nativePreferredScaleId || "";
     const now = Date.now();
     const reconnectState = scaleReconnectRef.current;
     if (reconnectState.pending) return;
@@ -2552,7 +2640,7 @@ export function App() {
       .finally(() => {
         scaleReconnectRef.current.pending = false;
       });
-  }, [currentMachineMode, data.loaded, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, machineSleeping, nativeDevices, page, requestScaleConnection]);
+  }, [currentMachineMode, data.loaded, liveTelemetry.scaleConnected, liveTelemetry.scaleVerificationActive, machineSleeping, nativeDevices, nativePreferredScaleId, page, requestScaleConnection, scaleRecoveryTick]);
 
   const saveBag = async (bag: Bag) => {
     const bean = await api.createBean({
@@ -3028,8 +3116,14 @@ export function App() {
         onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
         forceDiscovery: true
       });
+      if (result.canceled) return;
       if (result.connected) {
         setStatus({ type: "success", message: "Scale connected." });
+        return;
+      }
+
+      if (result.pending) {
+        setStatus({ type: "success", message: "Waiting for the scale. Connection recovery continues automatically." });
         return;
       }
 
@@ -3060,16 +3154,25 @@ export function App() {
       setStatus({ type: "success", message: "Scale tared." });
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
+      if (error instanceof ReaPrimeApiError && error.status === 400 && error.message.includes("block_tare_during_shot")) {
+        setStatus({ type: "success", message: "Tare is disabled during the shot to preserve weight stop." });
+        return;
+      }
       try {
         const result = await requestScaleConnection({
           discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
           onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
           forceDiscovery: true
         });
+        if (result.canceled) return;
         if (result.connected) {
           await api.tareScale();
           await data.refreshConnectivity();
           setStatus({ type: "success", message: "Scale connected and tared." });
+          return;
+        }
+        if (result.pending) {
+          setStatus({ type: "success", message: "Waiting for the scale. Connection recovery continues automatically." });
           return;
         }
         if (result.requested || result.found) {

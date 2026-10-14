@@ -1,4 +1,5 @@
 import type { AppInfo, DeviceInfo, MachineState, SensorListItem, WaterLevels } from "../api/types";
+import { isPrimaryScaleCandidate } from "./scaleConnection";
 
 const DEFAULT_TANK_LEVEL_MM = 60;
 const DEFAULT_TANK_CAPACITY_ML = 2000;
@@ -79,20 +80,7 @@ function isR2Device(device: DeviceInfo): boolean {
 }
 
 function isScaleDevice(device: DeviceInfo): boolean {
-  const label = deviceLabel(device);
-  return (
-    device.type === "scale" ||
-    label.includes("scale") ||
-    label.includes("microbalance") ||
-    label.includes("acaia") ||
-    label.includes("hiroia") ||
-    label.includes("lunar") ||
-    label.includes("pearl") ||
-    label.includes("felicita") ||
-    label.includes("bookoo") ||
-    label.includes("boo koo") ||
-    label.includes("decent scale")
-  );
+  return isPrimaryScaleCandidate(device);
 }
 
 function isConnectedDeviceState(state: unknown): boolean {
@@ -113,7 +101,7 @@ function scaleConnectedFromMachineState(machineState: MachineState | null): bool
     connectedText(recordValue(machineState, "scale_connection_state")) ??
     connectedText(recordValue(machineState, "scaleConnectionState"));
   if (direct !== undefined) return direct;
-  return machineState.connectionStatus?.phase === "ready" || typeof machineState.scale?.weight === "number";
+  return typeof machineState.scale?.weight === "number";
 }
 
 function scaleConnectedFromDevices(devices: DeviceInfo[] | undefined): boolean {
@@ -205,7 +193,7 @@ export function buildConnectivityStatuses({
   const scaleConnectedByDevice = scaleConnectedFromDevices(devices);
   const scaleExplicitlyDisconnected = !scaleConnectedByDevice && scaleExplicitlyDisconnectedFromDevices(devices);
   const hasScale = requireLiveScaleConfirmation
-    ? Boolean(scaleConnected) && !scaleExplicitlyDisconnected
+    ? Boolean(scaleConnected)
     : !scaleExplicitlyDisconnected &&
       (Boolean(scaleConnected) ||
         scaleConnectedFromMachineState(machineState) ||

@@ -215,6 +215,7 @@ export interface DeviceInfo {
   state?: "connected" | "disconnected" | "discovered" | string;
   type?: "machine" | "scale" | "sensor" | string;
   available?: boolean;
+  connectionRole?: "primary" | "auxiliary";
 }
 
 export interface AppInfo {

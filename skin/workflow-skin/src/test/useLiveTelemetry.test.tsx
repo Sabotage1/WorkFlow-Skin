@@ -60,7 +60,7 @@ describe("useLiveTelemetry", () => {
     expect(result.current.machineMode).toEqual({ state: "espresso", substate: "pouring" });
 
     act(() => window.dispatchEvent(new Event("focus")));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(8));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(10));
     expect(result.current.machineStreamConnected).toBe(false);
     expect(result.current.machineMode).toBeNull();
 
@@ -106,6 +106,17 @@ describe("useLiveTelemetry", () => {
     expect(result.current.scaleConnected).toBe(false);
   });
 
+  it("observes native discovery and primary/auxiliary ownership without scanning", () => {
+    const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
+    const socket = FakeWebSocket.instances.find((candidate) => candidate.url.endsWith("/ws/v1/devices"));
+    const devices = [{ id: "aux", type: "scale", state: "connected", connectionRole: "auxiliary" }];
+    act(() => socket?.emit("message", new MessageEvent("message", { data: JSON.stringify({ devices, scanning: true, connectionStatus: { phase: "scanning" } }) })));
+    expect(result.current.deviceState).toEqual({ devices, scanning: true, phase: "scanning" });
+    act(() => socket?.close());
+    expect(result.current.deviceState).toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(5);
+  });
+
   it("does not reset healthy live streams when the optional shot lifecycle socket is unavailable", () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useLiveTelemetry("ws://machine"));
@@ -122,7 +133,7 @@ describe("useLiveTelemetry", () => {
       vi.advanceTimersByTime(1001);
     });
 
-    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(FakeWebSocket.instances).toHaveLength(5);
     expect(result.current.machineStreamConnected).toBe(true);
     expect(result.current.machineMode).toEqual({ state: "espresso", substate: "pouring" });
   });
@@ -153,6 +164,6 @@ describe("useLiveTelemetry", () => {
     expect(result.current.machineMode).toBeNull();
 
     act(() => vi.advanceTimersByTime(1001));
-    expect(FakeWebSocket.instances).toHaveLength(8);
+    expect(FakeWebSocket.instances).toHaveLength(10);
   });
 });

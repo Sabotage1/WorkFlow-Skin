@@ -85,6 +85,7 @@ export interface CreateProfilePayload {
 export interface ScanDevicesOptions {
   connect?: boolean;
   quick?: boolean;
+  connectPreferredScaleEarly?: boolean;
 }
 
 export function apiBaseUrl(locationUrl?: URL): string {
@@ -422,15 +423,16 @@ export class ReaPrimeApi {
   }
 
   listDevices() {
-    return this.request<DeviceInfo[]>("/api/v1/devices");
+    return this.request<DeviceInfo[]>("/api/v1/devices", {}, 10000);
   }
 
   scanDevices(options: ScanDevicesOptions = {}) {
     const search = new URLSearchParams();
     if (options.connect !== undefined) search.set("connect", String(options.connect));
     if (options.quick !== undefined) search.set("quick", String(options.quick));
+    if (options.connectPreferredScaleEarly !== undefined) search.set("connectPreferredScaleEarly", String(options.connectPreferredScaleEarly));
     const query = search.toString();
-    return this.request<DeviceInfo[]>(`/api/v1/devices/scan${query ? `?${query}` : ""}`);
+    return this.request<DeviceInfo[]>(`/api/v1/devices/scan${query ? `?${query}` : ""}`, {}, options.quick ? 10000 : 60000);
   }
 
   connectDevice(deviceId: string) {

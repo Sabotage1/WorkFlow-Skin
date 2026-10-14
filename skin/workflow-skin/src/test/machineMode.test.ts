@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveMachineModeSnapshot, shouldPollMachineState } from "../lib/machineMode";
+import { resolveMachineModeSnapshot, shouldPollMachineState, workflowActivityForMode } from "../lib/machineMode";
 
 describe("shouldPollMachineState", () => {
+  it.each(["pausedSteam", "puffing"])("keeps %s in the steam workflow", (mode) => {
+    expect(workflowActivityForMode(mode)).toBe("steam");
+    expect(shouldPollMachineState({ currentMode: mode, hasCompletedActivity: false })).toBe(true);
+  });
   it("keeps polling when live telemetry still reports an active mode after the effective mode is idle", () => {
     expect(shouldPollMachineState({ currentMode: "idle", liveMode: "espresso", hasCompletedActivity: false })).toBe(true);
   });

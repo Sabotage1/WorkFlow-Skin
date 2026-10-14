@@ -38,7 +38,7 @@ export function isBrewingMode(state: string | undefined): boolean {
 
 export function isSteamingMode(state: string | undefined): boolean {
   const mode = compactMachineMode(state);
-  return mode === "steam" || mode === "steaming" || mode.includes("steam");
+  return mode === "steam" || mode === "steaming" || mode === "puffing" || mode.includes("steam");
 }
 
 export function isIdleMode(state: string | undefined): boolean {

@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiWebSocketBaseUrl } from "../api/reaprime";
-import type { ShotSnapshot, WaterLevels, WeightSnapshot } from "../api/types";
+import type { DeviceInfo, ShotSnapshot, WaterLevels, WeightSnapshot } from "../api/types";
 import { appendLiveMeasurement, shouldClearForShotStart } from "../lib/liveMeasurements";
 import { parseShotLifecycle, retainLatestFinishedShotLifecycle, type ShotLifecycle } from "../lib/shotLifecycle";
 
 export interface LiveTelemetryOptions {
   streamScale?: boolean;
+}
+
+export interface LiveDeviceState {
+  devices: DeviceInfo[];
+  scanning: boolean;
+  phase?: string;
 }
 
 const SCALE_STATUS_READING_TIMEOUT_MS = 5000;
@@ -94,6 +100,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
   const [measurements, setMeasurements] = useState<ShotSnapshot[]>([]);
   const [scaleSnapshot, setScaleSnapshot] = useState<WeightSnapshot | null>(null);
   const [scaleConnected, setScaleConnected] = useState(false);
+  const [deviceState, setDeviceState] = useState<LiveDeviceState | null>(null);
   const [waterLevels, setWaterLevels] = useState<WaterLevels | null>(null);
   const [machineSnapshot, setMachineSnapshot] = useState<ShotSnapshot["machine"] | null>(null);
   const [machineMode, setMachineMode] = useState<{ state?: string; substate?: string } | null>(null);
@@ -186,6 +193,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     setMachineSnapshot(null);
     setMachineStreamConnected(false);
     setScaleConnected(false);
+    setDeviceState(null);
     setShotLifecycle(null);
 
     let machineSocket: WebSocket | null = null;
@@ -281,6 +289,13 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
       if (levels) setWaterLevels(levels);
     });
 
+    connect("/ws/v1/devices", (data) => {
+      if (!isRecord(data) || !Array.isArray(data.devices) || typeof data.scanning !== "boolean") return;
+      const devices = data.devices.filter((device): device is DeviceInfo => isRecord(device) && typeof device.id === "string");
+      setDeviceState({ devices, scanning: data.scanning,
+        phase: isRecord(data.connectionStatus) && typeof data.connectionStatus.phase === "string" ? data.connectionStatus.phase : undefined });
+    }, { onClose: () => setDeviceState(null), reconnectOnClose: false });
+
     connect("/ws/v1/machine/shotState", (data) => {
       const lifecycle = parseShotLifecycle(data);
       if (!lifecycle) return;
@@ -312,6 +327,7 @@ export function useLiveTelemetry(baseUrl = apiWebSocketBaseUrl(), options: LiveT
     measurements,
     scaleSnapshot,
     scaleConnected,
+    deviceState,
     scaleVerificationActive,
     machineVerificationActive,
     waterLevels,

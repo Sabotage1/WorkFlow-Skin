@@ -12,6 +12,12 @@ describe("apiBaseUrl", () => {
 });
 
 describe("ReaPrimeApi", () => {
+  it("sends the native preferred-scale reconnect option with a bounded quick scan", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
+    await new ReaPrimeApi("http://tablet:8080").scanDevices({ connect: true, quick: true, connectPreferredScaleEarly: true });
+    expect(fetch).toHaveBeenCalledWith("http://tablet:8080/api/v1/devices/scan?connect=true&quick=true&connectPreferredScaleEarly=true",
+      expect.objectContaining({ method: "GET", signal: expect.any(AbortSignal) }));
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

@@ -22,6 +22,17 @@ const r2Sensor: SensorListItem = {
 };
 
 describe("buildConnectivityStatuses", () => {
+  it("uses the primary stream even while inventory still reports disconnected", () => {
+    const statuses = buildConnectivityStatuses({ apiHost: "tablet", machineState: { connected: true }, sensors: [], r2Sensor: null,
+      devices: [{ id: "scale", type: "scale", state: "disconnected" }], requireLiveScaleConfirmation: true, scaleConnected: true });
+    expect(statuses.find((status) => status.id === "scale")?.connected).toBe(true);
+  });
+
+  it("does not confuse an auxiliary scale or a ready machine with the espresso scale", () => {
+    const statuses = buildConnectivityStatuses({ apiHost: "tablet", machineState: { connected: true, connectionStatus: { phase: "ready" } },
+      sensors: [], r2Sensor: null, devices: [{ id: "aux", type: "scale", state: "connected", connectionRole: "auxiliary" }] });
+    expect(statuses.find((status) => status.id === "scale")?.connected).toBe(false);
+  });
   it("shows machine, wifi, and scale status with machine IP", () => {
     const machineState: MachineState = {
       connected: true,
