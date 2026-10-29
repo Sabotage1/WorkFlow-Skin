@@ -146,6 +146,7 @@ export function ReviewPage({
   const [loadingGraphShotIds, setLoadingGraphShotIds] = useState<Record<string, boolean>>({});
   const [failedGraphShotIds, setFailedGraphShotIds] = useState<Record<string, boolean>>({});
   const autoReadShotRef = useRef<string | null>(null);
+  const r2ReadPendingRef = useRef(false);
   const readR2Ref = useRef<((options?: { allowUnavailable?: boolean }) => Promise<void>) | null>(null);
   const requestedShotIdsRef = useRef<Set<string>>(new Set());
 
@@ -322,11 +323,13 @@ export function ReviewPage({
   }
 
   async function readR2(options: { allowUnavailable?: boolean } = {}) {
+    if (r2ReadPendingRef.current) return;
     if (!r2Available && !options.allowUnavailable) {
       setR2Status({ type: "error", message: "No DiFluid R2 sensor detected." });
       return;
     }
 
+    r2ReadPendingRef.current = true;
     setR2Busy(true);
     setR2Status({ type: "info", message: r2Available ? "Reading from R2..." : "Looking for R2..." });
     try {
@@ -340,6 +343,7 @@ export function ReviewPage({
     } catch (error) {
       setR2Status({ type: "error", message: error instanceof Error ? error.message : "Could not read R2." });
     } finally {
+      r2ReadPendingRef.current = false;
       setR2Busy(false);
     }
   }

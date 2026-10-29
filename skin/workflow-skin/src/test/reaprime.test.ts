@@ -461,8 +461,19 @@ describe("ReaPrimeApi", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "http://machine:8080/api/v1/sensors/F4:12:FA:FA:AC:E3/execute",
+      "http://machine:8080/api/v1/sensors/F4%3A12%3AFA%3AFA%3AAC%3AE3/execute",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ commandId: "measure", params: { timeout: 30 } }) })
+    );
+  });
+
+  it("encodes the entire plugin sensor id once as an opaque path component", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ status: "ok", result: { started: true } }), { status: 200 }));
+    const api = new ReaPrimeApi("http://machine:8080");
+    const id = "plugin:difluid-r2.reaplugin:difluid-r2:device/with%2Fescape";
+    await api.executeSensor(id, "measure", {});
+    expect(fetch).toHaveBeenCalledWith(
+      `http://machine:8080/api/v1/sensors/${encodeURIComponent(id)}/execute`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ commandId: "measure", params: {} }) })
     );
   });
 

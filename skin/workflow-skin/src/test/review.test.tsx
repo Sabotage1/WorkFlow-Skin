@@ -802,6 +802,31 @@ describe("ReviewPage", () => {
     expect(appMocks.executeSensor).toHaveBeenCalledWith("sensor-r2", "measure", { timeout: 30 });
   });
 
+  it("waits for a plugin result from the manual button and replaces the saved native id", async () => {
+    vi.useFakeTimers();
+    const pluginId = "plugin:difluid-r2.reaplugin:difluid-r2:F4:12:FA:FA:AC:E3";
+    appMocks.data = appData({
+      sensors: [{ ...r2Sensor, id: "F4:12:FA:FA:AC:E3" }, { ...r2Sensor, id: pluginId }],
+      settings: { ...defaultSkinSettings, r2SensorId: "F4:12:FA:FA:AC:E3" }
+    });
+    appMocks.executeSensor
+      .mockResolvedValueOnce({ status: "ok", result: { started: true } })
+      .mockResolvedValueOnce({ status: "error", message: "DiFluid R2 has no completed reading" })
+      .mockResolvedValueOnce({ status: "ok", result: { reading: { tds: 9.4 } } });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Read from R2" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: "Reading R2" })).toBeDisabled();
+    expect(appMocks.executeSensor).toHaveBeenNthCalledWith(1, pluginId, "measure", {});
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(screen.getByLabelText("TDS")).toHaveValue("9.4");
+    expect(appMocks.data.persistSettings).toHaveBeenCalledWith(expect.objectContaining({ r2SensorId: pluginId }));
+  });
+
   it("imports an R2 TDS reading from the native sensor endpoint", async () => {
     appMocks.data = appData({ sensors: [r2Sensor] });
     appMocks.executeSensor.mockResolvedValue({
@@ -925,6 +950,19 @@ describe("ReviewPage", () => {
 
     expect(onReadR2).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("TDS")).toHaveValue("9.6");
+  });
+
+  it("does not start a second test when the automatic timer fires during a manual reading", async () => {
+    vi.useFakeTimers();
+    let finish!: (tds: number) => void;
+    const onReadR2 = vi.fn(() => new Promise<number>((resolve) => { finish = resolve; }));
+    render(<ReviewPage shot={shot} previousShots={[]} onSaveAnnotations={vi.fn()} onUploadVisualizer={vi.fn()}
+      r2Sensor={r2Sensor} onReadR2={onReadR2} autoReadR2 autoReadR2DelaySeconds={20} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read from R2" }));
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(onReadR2).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(9.7); });
+    expect(screen.getByLabelText("TDS")).toHaveValue("9.7");
   });
 
   it("shows local feedback when R2 is unavailable", async () => {

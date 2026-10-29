@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import skinManifest from "../skin-manifest.json";
 import { CommunityApi } from "./api/community";
 import { apiBaseUrl, isTransientApiError, ReaPrimeApi, ReaPrimeApiError, type CreateGrinderPayload } from "./api/reaprime";
-import { findDifluidR2Sensor } from "./api/sensors";
+import { executeR2Measurement, extractR2Tds, findDifluidR2Sensor, isPluginR2Sensor } from "./api/sensors";
 import type {
   BurrType,
   DecentAccountStatus,
@@ -254,48 +254,6 @@ function waterRefillMessage(machineState: MachineState | null | undefined, liveW
   }
   if (finiteNumber(waterLevels?.currentLevel)) return `Water is at ${Math.round(waterLevels.currentLevel)}mm.`;
   return "The machine is asking for a refill.";
-}
-
-function extractNumericTds(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  if (!value || typeof value !== "object") return null;
-  if ("key" in value && String((value as { key?: unknown }).key).toLowerCase() === "tds") {
-    const tds = extractNumericTds((value as { value?: unknown }).value);
-    if (tds !== null) return tds;
-  }
-  if ("tds" in value) {
-    const tds = extractNumericTds((value as { tds?: unknown }).tds);
-    if (tds !== null) return tds;
-  }
-  if ("data" in value) {
-    const tds = extractNumericTds((value as { data?: unknown }).data);
-    if (tds !== null) return tds;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const tds = extractNumericTds(item);
-      if (tds !== null) return tds;
-    }
-  }
-  return null;
-}
-
-function extractR2Tds(value: unknown): number | null {
-  if (!value || typeof value !== "object") return null;
-  const result = (value as { result?: unknown }).result;
-  if (result && typeof result === "object") {
-    const tds = extractR2Tds(result);
-    if (tds !== null) return tds;
-  }
-  const reading = (value as { reading?: unknown }).reading;
-  if (reading && typeof reading === "object") {
-    return extractNumericTds((reading as { tds?: unknown }).tds);
-  }
-  return extractNumericTds(value);
 }
 
 function replaceProfileIdInSettings(settings: SkinSettings, fromId: string, toId: string): SkinSettings {
@@ -858,7 +816,9 @@ export function App() {
   nativeDeviceStateRef.current = liveTelemetry.deviceState;
   const detectedR2Sensor = findDifluidR2Sensor(data.sensors);
   const configuredR2Sensor = data.settings.r2SensorId ? data.sensors.find((sensor) => sensor.id === data.settings.r2SensorId) ?? null : null;
-  const r2Sensor = configuredR2Sensor ?? detectedR2Sensor;
+  const r2Sensor = detectedR2Sensor && isPluginR2Sensor(detectedR2Sensor.id) && !isPluginR2Sensor(configuredR2Sensor?.id ?? "")
+    ? detectedR2Sensor
+    : configuredR2Sensor ?? detectedR2Sensor;
   const connectedR2Device = nativeDevices.find(
     (device) => (isConfiguredR2Device(device, data.settings.r2SensorId) || isR2Device(device)) && isConnectedDevice(device)
   );
@@ -1843,7 +1803,8 @@ export function App() {
         setCompletedReviewShot(pendingShot);
         setPendingCompletedReview({ capture: completed, shot: pendingShot });
         setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
-        setAutoReadR2ShotId(null);
+        // The new shot may already have armed its R2 timer through the history
+        // refresh. Keep that request while the pending Review is resolved.
         skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId: pendingShot.id });
       }
       setPage("review");
@@ -2836,12 +2797,8 @@ export function App() {
     });
   };
 
-  const executeR2Measurement = async (sensorId: string) => {
-    return api.executeSensor(sensorId, "measure", { timeout: 30 });
-  };
-
   const readR2 = async () => {
-    let sensorId = r2Sensor?.id ?? data.settings.r2SensorId ?? connectedR2Device?.id;
+    let sensorId = r2Sensor?.id ?? connectedR2Device?.id ?? data.settings.r2SensorId;
     if (!sensorId) {
       setStatus({ type: "error", message: "No DiFluid R2 sensor detected." });
       return null;
@@ -2850,17 +2807,17 @@ export function App() {
     try {
       let result;
       try {
-        result = await executeR2Measurement(sensorId);
+        result = await executeR2Measurement(api, sensorId);
       } catch (error) {
         if (!r2MeasurementNeedsReconnect(errorMessage(error))) throw error;
         sensorId = await reconnectR2ForMeasurement(sensorId);
-        result = await executeR2Measurement(sensorId);
+        result = await executeR2Measurement(api, sensorId);
       }
 
       if (result.status === "error") {
         if (r2MeasurementNeedsReconnect(result.message ?? "")) {
           sensorId = await reconnectR2ForMeasurement(sensorId);
-          result = await executeR2Measurement(sensorId);
+          result = await executeR2Measurement(api, sensorId);
         }
       }
 
@@ -2874,9 +2831,8 @@ export function App() {
         setStatus({ type: "error", message: "R2 did not return a TDS reading." });
         return null;
       }
-      const discoveredSensorId = r2Sensor?.id ?? connectedR2Device?.id;
-      if (discoveredSensorId && data.settings.r2SensorId !== discoveredSensorId) {
-        await Promise.resolve(data.persistSettings({ ...data.settings, r2SensorId: discoveredSensorId })).catch(() => undefined);
+      if (data.settings.r2SensorId !== sensorId) {
+        await Promise.resolve(data.persistSettings({ ...data.settings, r2SensorId: sensorId })).catch(() => undefined);
       }
       return tds;
     } catch (error) {

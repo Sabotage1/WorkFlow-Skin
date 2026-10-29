@@ -391,11 +391,12 @@ export class ReaPrimeApi {
   executeSensor(id: string, commandId: string, params?: Record<string, unknown>) {
     const sensorId = id.trim().replace(/^\/+|\/+$/g, "");
     return this.request<{ status: "ok" | "error"; result?: unknown; message?: string }>(
-      `/api/v1/sensors/${sensorId}/execute`,
+      `/api/v1/sensors/${encodeURIComponent(sensorId)}/execute`,
       {
         method: "POST",
         body: JSON.stringify({ commandId, params })
-      }
+      },
+      sensorId.startsWith("plugin:") ? 12000 : 35000
     );
   }
 

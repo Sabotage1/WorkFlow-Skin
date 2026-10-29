@@ -2364,8 +2364,9 @@ describe("App shell", () => {
     expect(fetchState.fetchMock).not.toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.anything());
   });
 
-  it("measures R2 twenty seconds after the shot reaches the review page", async () => {
+  it.each(["native", "plugin"])("measures %s R2 twenty seconds after the shot reaches the review page", async (driver) => {
     vi.useFakeTimers();
+    const sensorId = driver === "plugin" ? "plugin:difluid-r2.reaplugin:difluid-r2:F4:12:FA:FA:AC:E3" : detectedR2Sensor.id;
     const completedShot: ShotRecord = {
       id: "completed-shot-r2-auto",
       timestamp: "2026-06-17T08:00:00.000Z",
@@ -2378,10 +2379,15 @@ describe("App shell", () => {
     const fetchState = mockReaFetch(
       { ...initialSettings, r2SensorId: "F4:12:FA:FA:AC:E3" },
       {
-        sensors: [detectedR2Sensor],
+        sensors: [{ ...detectedR2Sensor, id: sensorId }],
         devices: [{ id: "F4:12:FA:FA:AC:E3", name: "DiFluid R2", type: "sensor", state: "connected" }],
         machineState: { connected: true, state: { state: "espresso", substate: "pouring" } },
-        shots: []
+        shots: [],
+        ...(driver === "plugin" ? { sensorExecuteResults: [
+          { body: { status: "ok", result: { started: true } } },
+          { status: 500, body: { status: "error", message: "DiFluid R2 has no completed reading" } },
+          { body: { status: "ok", result: { reading: { tds: 9.8 } } } }
+        ] } : {})
       }
     );
     render(<App />);
@@ -2418,6 +2424,15 @@ describe("App shell", () => {
     });
 
     expect(fetchState.sensorExecuteCount).toBe(1);
+    if (driver === "plugin") {
+      expect(screen.getByRole("button", { name: "Reading R2" })).toBeDisabled();
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(fetchState.sensorExecuteCount).toBe(3);
+      expect(fetchState.fetchMock).toHaveBeenCalledWith(
+        `http://localhost:8080/api/v1/sensors/${encodeURIComponent(sensorId)}/execute`,
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ commandId: "measure", params: {} }) })
+      );
+    }
     expect(screen.getByText("R2 TDS 9.8 imported.")).toBeInTheDocument();
   });
 
