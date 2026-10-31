@@ -6,11 +6,17 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.4.2](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.2)
+- [WorkFlow Skin v0.4.3](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.3)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
-Version 0.4.2 fixes automatic and manual R2 readings with the dedicated
+Version 0.4.3 keeps R2 measurement and connection diagnostics in the structured
+logs. Review displays the imported TDS directly, without R2 status banners.
+Automatic readings require a currently connected, available R2 and a registered
+sensor; a saved sensor ID or stale metadata does not trigger a measurement.
+Disconnecting the R2 cancels a queued automatic reading.
+
+It retains the 0.4.2 automatic and manual R2 integration with the dedicated
 `difluid-r2.reaplugin` driver on Decaid 0.9.0 and 0.9.1. It starts the test with the plugin's
 empty parameter object and waits for its completed result, preserves the native
 R2 path, and migrates a saved native sensor ID after a successful plugin reading.
@@ -366,4 +372,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.4.2 adds dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.4.3 keeps R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.

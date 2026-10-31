@@ -8,6 +8,7 @@ import { calculateEy, cleanNumber } from "../lib/ey";
 import { tasteScoreLabel, tasteTone, tasteToneStyles } from "../lib/shotTaste";
 import { grindSizeFromShot, previousFiveForBag, shotContext, shotStats } from "../lib/shotStats";
 import { DEFAULT_R2_MEASURE_DELAY_SECONDS } from "../state/skinSettings";
+import { skinLog } from "../lib/skinLog";
 
 function formatStat(value: number | null, unit: string): string {
   return value == null ? "—" : `${value}${unit}`;
@@ -141,13 +142,12 @@ export function ReviewPage({
   const [tasteRating, setTasteRating] = useState(shot.annotations?.enjoyment ?? 7);
   const [notes, setNotes] = useState(shot.annotations?.espressoNotes ?? "");
   const [r2Busy, setR2Busy] = useState(false);
-  const [r2Status, setR2Status] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const [loadedShotsById, setLoadedShotsById] = useState<Record<string, ShotRecord>>({});
   const [loadingGraphShotIds, setLoadingGraphShotIds] = useState<Record<string, boolean>>({});
   const [failedGraphShotIds, setFailedGraphShotIds] = useState<Record<string, boolean>>({});
   const autoReadShotRef = useRef<string | null>(null);
   const r2ReadPendingRef = useRef(false);
-  const readR2Ref = useRef<((options?: { allowUnavailable?: boolean }) => Promise<void>) | null>(null);
+  const readR2Ref = useRef<((options?: { automatic?: boolean }) => Promise<void>) | null>(null);
   const requestedShotIdsRef = useRef<Set<string>>(new Set());
 
   const ey = useMemo(
@@ -322,26 +322,26 @@ export function ReviewPage({
     await onRecommendShot({ ...shotWithSelectedBag(fullShot), annotations });
   }
 
-  async function readR2(options: { allowUnavailable?: boolean } = {}) {
+  async function readR2(options: { automatic?: boolean } = {}) {
     if (r2ReadPendingRef.current) return;
-    if (!r2Available && !options.allowUnavailable) {
-      setR2Status({ type: "error", message: "No DiFluid R2 sensor detected." });
+    if (!r2Available || (options.automatic && !r2Sensor)) {
+      skinLog("r2_read_skipped", { shotId: shot.id, automatic: options.automatic === true, reason: "not_connected" });
       return;
     }
 
     r2ReadPendingRef.current = true;
     setR2Busy(true);
-    setR2Status({ type: "info", message: r2Available ? "Reading from R2..." : "Looking for R2..." });
+    skinLog("r2_read_started", { shotId: shot.id, automatic: options.automatic === true });
     try {
       const value = await onReadR2();
-      if (typeof value === "number") {
+      if (typeof value === "number" && Number.isFinite(value)) {
         setTdsText(String(value));
-        setR2Status({ type: "success", message: `R2 TDS ${value} imported.` });
+        skinLog("r2_read_succeeded", { shotId: shot.id, tds: value, automatic: options.automatic === true });
       } else {
-        setR2Status({ type: "error", message: "R2 did not return a TDS reading." });
+        skinLog("r2_read_empty", { shotId: shot.id });
       }
     } catch (error) {
-      setR2Status({ type: "error", message: error instanceof Error ? error.message : "Could not read R2." });
+      skinLog("r2_read_failed", { shotId: shot.id, error: error instanceof Error ? error.message : String(error) });
     } finally {
       r2ReadPendingRef.current = false;
       setR2Busy(false);
@@ -353,23 +353,23 @@ export function ReviewPage({
   });
 
   useEffect(() => {
-    if (pending || !autoReadR2 || autoReadShotRef.current === shot.id) return;
+    if (pending || !autoReadR2 || !r2Available || autoReadShotRef.current === shot.id) return;
     autoReadShotRef.current = shot.id;
     const delayMs = Math.max(0, Math.round(autoReadR2DelaySeconds) * 1000);
     if (delayMs === 0) {
-      void readR2Ref.current?.({ allowUnavailable: true });
+      void readR2Ref.current?.({ automatic: true });
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void readR2Ref.current?.({ allowUnavailable: true });
+      void readR2Ref.current?.({ automatic: true });
     }, delayMs);
 
     return () => {
       window.clearTimeout(timer);
       if (autoReadShotRef.current === shot.id) autoReadShotRef.current = null;
     };
-  }, [autoReadR2, autoReadR2DelaySeconds, pending, shot.id]);
+  }, [autoReadR2, autoReadR2DelaySeconds, pending, r2Available, shot.id]);
 
   useEffect(() => {
     setSelectedShotId(shot.id);
@@ -501,11 +501,6 @@ export function ReviewPage({
         <button type="button" className="ghost-button" disabled={r2Busy} onClick={() => void readR2()}>
           {r2Busy ? "Reading R2" : "Read from R2"}
         </button>
-        {r2Status && (
-          <p className={r2Status.type === "error" ? "inline-panel-status error" : "inline-panel-status"} role={r2Status.type === "error" ? "alert" : "status"}>
-            {r2Status.message}
-          </p>
-        )}
       </section>
       <section className="panel wide review-comparison">
         <h2>Same Bag Comparison</h2>

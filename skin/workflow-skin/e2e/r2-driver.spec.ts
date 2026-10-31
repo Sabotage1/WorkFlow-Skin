@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-test("automatically reads the dedicated R2 driver, reads again manually, and saves TDS/EY", async ({ page }, testInfo) => {
+for (const scenario of ["connected", "offline", "request-failed"] as const) {
+test(`R2 ${scenario}: keeps diagnostics in logs and imports only completed readings`, async ({ page }, testInfo) => {
+  const logs: string[] = [];
+  page.on("console", (message) => logs.push(message.text()));
+  if (scenario === "offline") await page.clock.install();
   const nativeId = "F4:12:FA:FA:AC:E3";
   const sensorId = `plugin:difluid-r2.reaplugin:difluid-r2:${nativeId}`;
   const profile = { title: "Morning espresso" };
@@ -43,6 +47,10 @@ test("automatically reads the dedicated R2 driver, reads again manually, and sav
       expect(command.params).toEqual({});
       if (command.commandId === "measure") {
         measureCount++;
+        if (scenario === "request-failed") {
+          await route.fulfill({ status: 404, json: { error: `Sensor not found: ${sensorId}` } });
+          return;
+        }
         readyAt = Date.now() + 1200;
         body = { status: "ok", result: { started: true } };
       } else {
@@ -54,13 +62,13 @@ test("automatically reads the dedicated R2 driver, reads again manually, and sav
         }
         body = { status: "ok", result: { reading: { tds: measureCount === 1 ? 9.7 : 9.8, temperatureC: 26 } } };
       }
-    } else if (path === "/api/v1/sensors") body = [{ id: sensorId, info: {
+    } else if (path === "/api/v1/sensors") body = scenario === "offline" ? [] : [{ id: sensorId, info: {
       name: "DiFluid R2", vendor: "DiFluid", data: [{ key: "reading", type: "object" }],
       commands: [{ id: "measure" }, { id: "getReading" }]
     } }];
     else if (path === "/api/v1/devices") body = [
       { id: "de1", type: "machine", state: "connected", available: true },
-      { id: sensorId, name: "DiFluid R2", type: "sensor", state: "connected", available: true }
+      { id: sensorId, name: "DiFluid R2", type: "sensor", state: scenario === "offline" ? "disconnected" : "connected", available: scenario !== "offline" }
     ];
     else if (path === "/api/v1/machine/state") body = { connected: true, state: { state: mode, substate: "idle" } };
     else if (path === "/api/v1/profiles") body = [{ id: "p1", profile }];
@@ -86,14 +94,31 @@ test("automatically reads the dedicated R2 driver, reads again manually, and sav
   mode = "idle";
   sendLifecycle("stopping");
   await expect(page.getByRole("heading", { name: "Shot Review" })).toBeVisible();
-  await expect(page.getByText("R2 TDS 9.7 imported.")).toBeVisible({ timeout: 10_000 });
+  if (scenario !== "connected") {
+    if (scenario === "offline") {
+      await page.clock.runFor(60_000);
+      await page.getByRole("button", { name: "Read from R2" }).click();
+      await expect.poll(() => logs.some((line) => line.includes('"event":"r2_read_skipped"'))).toBe(true);
+      expect(measureCount).toBe(0);
+    } else {
+      await expect.poll(() => logs.some((line) => line.includes('"event":"r2_measurement_failed"') && line.includes("Sensor not found"))).toBe(true);
+      expect(measureCount).toBe(1);
+    }
+    await expect(page.getByText(/Could not read R2|Sensor not found|\/api\/v1\/sensors|R2 did not return|No DiFluid R2/)).toHaveCount(0);
+    await expect(page.getByLabel("TDS", { exact: true })).toHaveValue("");
+    await expect(page.getByRole("button", { name: "Save Review" })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath(`r2-${scenario}-quiet-review.png`), fullPage: true });
+    return;
+  }
+  await expect(page.getByLabel("TDS", { exact: true })).toHaveValue("9.7", { timeout: 10_000 });
+  await expect(page.getByText(/R2 TDS.*imported|Reading from R2|Could not read R2/)).toHaveCount(0);
   expect(measureCount).toBe(1);
   expect(pendingCount).toBeGreaterThan(0);
   expect(settings.r2SensorId).toBe(sensorId);
 
   await page.getByRole("button", { name: "Read from R2" }).click();
   await expect(page.getByRole("button", { name: "Reading R2" })).toBeDisabled();
-  await expect(page.getByText("R2 TDS 9.8 imported.")).toBeVisible();
+  await expect(page.getByLabel("TDS", { exact: true })).toHaveValue("9.8");
   expect(measureCount).toBe(2);
   await expect(page.getByLabel("TDS", { exact: true })).toHaveValue("9.8");
   await page.getByRole("button", { name: "Save Review" }).click();
@@ -101,3 +126,4 @@ test("automatically reads the dedicated R2 driver, reads again manually, and sav
   expect(savedAnnotations.drinkEy).toBe(19.6);
   await page.screenshot({ path: testInfo.outputPath("r2-driver-review.png"), fullPage: true });
 });
+}

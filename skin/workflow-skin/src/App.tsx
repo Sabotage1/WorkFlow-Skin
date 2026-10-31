@@ -21,6 +21,7 @@ import skinManifest from "../skin-manifest.json";
 import { CommunityApi } from "./api/community";
 import { apiBaseUrl, isTransientApiError, ReaPrimeApi, ReaPrimeApiError, type CreateGrinderPayload } from "./api/reaprime";
 import { executeR2Measurement, extractR2Tds, findDifluidR2Sensor, isPluginR2Sensor } from "./api/sensors";
+import { skinLog } from "./lib/skinLog";
 import type {
   BurrType,
   DecentAccountStatus,
@@ -113,10 +114,6 @@ import { useLiveTelemetry } from "./state/useLiveTelemetry";
 import { useReaData } from "./state/useReaData";
 import { useScaleShotFallback } from "./state/useScaleShotFallback";
 
-declare global {
-  var __WORKFLOW_SKIN_ENABLE_TEST_LOGS__: boolean | undefined;
-}
-
 type Page = MainMenuItemId | "screensaver";
 type CompletedActivityCapture = {
   activity: CompletedWorkflowActivity;
@@ -141,7 +138,6 @@ const MANUAL_DEVICE_DISCOVERY_ATTEMPTS = 1;
 const DEVICE_DISCOVERY_RETRY_DELAY_MS = 750;
 const DISPLAY_BRIGHTNESS_VERIFY_DELAYS_MS: readonly number[] = [0, 250, 750];
 const CURRENT_SKIN_VERSION = typeof skinManifest.version === "string" ? skinManifest.version : "";
-const SKIN_LOG_PREFIX = "[WorkFlow Skin]";
 const MANAGED_SCALE_RECOVERY_MIN_VERSION = [0, 7, 13] as const;
 
 interface TopStatusIndicator {
@@ -198,23 +194,6 @@ function dateOnlyToIsoDateTime(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed;
-}
-
-function skinLog(event: string, details: Record<string, unknown> = {}) {
-  if (typeof process !== "undefined" && process.env.NODE_ENV === "test" && !globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__) return;
-
-  try {
-    console.log(
-      `${SKIN_LOG_PREFIX} ${JSON.stringify({
-        event,
-        version: CURRENT_SKIN_VERSION,
-        timestamp: new Date().toISOString(),
-        ...details
-      })}`
-    );
-  } catch {
-    console.log(`${SKIN_LOG_PREFIX} ${event}`);
-  }
 }
 
 function compactStateName(value: string | undefined): string {
@@ -820,10 +799,10 @@ export function App() {
     ? detectedR2Sensor
     : configuredR2Sensor ?? detectedR2Sensor;
   const connectedR2Device = nativeDevices.find(
-    (device) => (isConfiguredR2Device(device, data.settings.r2SensorId) || isR2Device(device)) && isConnectedDevice(device)
+    (device) => isAvailableDevice(device) && (isConfiguredR2Device(device, data.settings.r2SensorId) || isR2Device(device)) && isConnectedDevice(device)
   );
   const r2DeviceConnected = Boolean(connectedR2Device && r2Sensor);
-  const r2Available = Boolean(r2Sensor || data.settings.r2SensorId || connectedR2Device);
+  const r2Available = Boolean(connectedR2Device);
   const workflowSelectedProfileId = selectedProfileIdFromWorkflow(data.workflow, data.profiles);
   const selectedProfileId = resolveDisplayedProfileId({
     workflowProfileId: workflowSelectedProfileId,
@@ -1832,7 +1811,7 @@ export function App() {
         data.cacheShot(completedShot);
         setPendingCompletedReview(null);
         setLastCompletedProfileId(capture.profileId ?? selectedProfileIdFromWorkflow(completedShot.workflow, data.profiles));
-        if (r2Available && autoReadR2ShotIdRef.current !== completedShot.id) {
+        if (r2DeviceConnected && autoReadR2ShotIdRef.current !== completedShot.id) {
           autoReadR2ShotIdRef.current = completedShot.id;
           setAutoReadR2ShotId(completedShot.id);
         }
@@ -1844,7 +1823,7 @@ export function App() {
     };
     void check();
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [api, brewingCoffee, completedReviewShot?.id, data.cacheShot, data.profiles, page, pendingCompletedReview, r2Available]);
+  }, [api, brewingCoffee, completedReviewShot?.id, data.cacheShot, data.profiles, page, pendingCompletedReview, r2DeviceConnected]);
 
   useEffect(() => {
     if (!data.loaded) return;
@@ -2022,11 +2001,11 @@ export function App() {
     knownLatestShotIdRef.current = latestShotId;
     if (!latestShot) return;
 
-    if (r2Available && autoReadR2ShotIdRef.current !== latestShot.id) {
+    if (r2DeviceConnected && autoReadR2ShotIdRef.current !== latestShot.id) {
       autoReadR2ShotIdRef.current = latestShot.id;
       setAutoReadR2ShotId(latestShot.id);
     }
-  }, [data.loaded, latestShot, r2Available]);
+  }, [data.loaded, latestShot, r2DeviceConnected]);
 
   useEffect(() => {
     if (!data.loaded || !isIdleMode(currentMachineMode)) return;
@@ -2199,7 +2178,7 @@ export function App() {
         if (reviewTarget) {
           setCompletedReviewShot(reviewTarget);
           setLastCompletedProfileId(selectedProfileIdFromWorkflow(reviewTarget.workflow, data.profiles));
-          if (r2Available) {
+          if (r2DeviceConnected) {
             autoReadR2ShotIdRef.current = reviewTarget.id;
             setAutoReadR2ShotId(reviewTarget.id);
           }
@@ -2251,7 +2230,7 @@ export function App() {
 
   const refreshR2Sensor = async (options: { forceConfiguredConnect?: boolean } = {}) => {
     setR2RefreshBusy(true);
-    setStatus({ type: "success", message: "Looking for DiFluid R2." });
+    skinLog("r2_manual_scan_started", { configuredDeviceId: data.settings.r2SensorId });
     try {
       await enqueueDeviceConnection(async () => {
         await wakeMachineIfNeeded(api, data.machineState, () => !machineSleepRequestedRef.current);
@@ -2259,7 +2238,7 @@ export function App() {
           fallbackDevices: data.devices ?? [],
           predicate: (device) => isR2Device(device) || isConfiguredR2Device(device, data.settings.r2SensorId),
           attempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
-          onRetry: () => setStatus({ type: "success", message: "Still scanning for DiFluid R2." })
+          onRetry: () => skinLog("r2_manual_scan_retry", { configuredDeviceId: data.settings.r2SensorId })
         });
         const r2Devices = discovery.devices
           .filter(
@@ -2277,7 +2256,6 @@ export function App() {
           await data.refreshConnectivity();
           if (discovery.firstError) throw discovery.firstError;
           skinLog("r2_manual_scan_not_found", { configuredDeviceId: data.settings.r2SensorId });
-          setStatus({ type: "error", message: "No available DiFluid R2 was found. Keep it awake and tap R2 again." });
           return;
         }
 
@@ -2315,7 +2293,6 @@ export function App() {
             await data.persistSettings({ ...data.settings, r2SensorId: sensorId });
             await data.refreshConnectivity();
             skinLog("r2_manual_connect_confirmed", { deviceId: sensorId, forced: options.forceConfiguredConnect === true });
-            setStatus({ type: "success", message: "R2 connected." });
             return;
           }
         }
@@ -2324,10 +2301,10 @@ export function App() {
         if (firstConnectError) {
           throw firstConnectError;
         }
-        setStatus({ type: "error", message: "R2 was found but did not report connected. Keep it awake and tap R2 again." });
+        skinLog("r2_manual_connect_unconfirmed", { configuredDeviceId: data.settings.r2SensorId });
       });
     } catch (error) {
-      setStatus({ type: "error", message: `Could not refresh R2: ${errorMessage(error)}` });
+      skinLog("r2_manual_scan_failed", { error: errorMessage(error) });
     } finally {
       setR2RefreshBusy(false);
     }
@@ -2798,9 +2775,9 @@ export function App() {
   };
 
   const readR2 = async () => {
-    let sensorId = r2Sensor?.id ?? connectedR2Device?.id ?? data.settings.r2SensorId;
-    if (!sensorId) {
-      setStatus({ type: "error", message: "No DiFluid R2 sensor detected." });
+    let sensorId = r2Sensor?.id ?? connectedR2Device?.id;
+    if (!connectedR2Device || !sensorId) {
+      skinLog("r2_measurement_skipped", { reason: "not_connected", configuredSensorId: data.settings.r2SensorId });
       return null;
     }
 
@@ -2822,13 +2799,13 @@ export function App() {
       }
 
       if (result.status === "error") {
-        setStatus({ type: "error", message: `Could not read R2: ${result.message ?? "Measurement command failed."}` });
+        skinLog("r2_measurement_failed", { sensorId, error: result.message ?? "Measurement command failed." });
         return null;
       }
 
       const tds = extractR2Tds(result.result);
       if (tds === null) {
-        setStatus({ type: "error", message: "R2 did not return a TDS reading." });
+        skinLog("r2_measurement_failed", { sensorId, error: "R2 did not return a TDS reading." });
         return null;
       }
       if (data.settings.r2SensorId !== sensorId) {
@@ -2836,7 +2813,7 @@ export function App() {
       }
       return tds;
     } catch (error) {
-      setStatus({ type: "error", message: `Could not read R2: ${errorMessage(error)}` });
+      skinLog("r2_measurement_failed", { sensorId, error: errorMessage(error) });
       return null;
     }
   };

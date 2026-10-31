@@ -88,7 +88,7 @@ function appData(overrides: Partial<NonNullable<typeof appMocks.data>> = {}) {
     batches: [],
     bags: [],
     grinders: [],
-    devices: [],
+    devices: overrides.sensors?.map((sensor) => ({ id: sensor.id, name: sensor.info.name, type: "sensor", state: "connected" })) ?? [],
     sensors: [],
     shots: [shot],
     settings: defaultSkinSettings,
@@ -100,6 +100,8 @@ function appData(overrides: Partial<NonNullable<typeof appMocks.data>> = {}) {
 }
 
 afterEach(() => {
+  delete globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__;
+  vi.restoreAllMocks();
   appMocks.data = null;
   appMocks.executeSensor.mockReset();
   appMocks.getShot.mockReset();
@@ -776,7 +778,7 @@ describe("ReviewPage", () => {
     expect(screen.getByText("Duration: 27s")).toBeInTheDocument();
   });
 
-  it("shows an error when no native R2 sensor is detected", async () => {
+  it("stays quiet when no R2 is connected", async () => {
     appMocks.data = appData();
 
     render(<App />);
@@ -784,11 +786,13 @@ describe("ReviewPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("No DiFluid R2 sensor detected.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(appMocks.executeSensor).not.toHaveBeenCalled();
   });
 
-  it("shows the native R2 sensor error message when measurement fails", async () => {
+  it("keeps R2 measurement errors in structured logs instead of the page", async () => {
+    globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__ = true;
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     appMocks.data = appData({ sensors: [r2Sensor] });
     appMocks.executeSensor.mockResolvedValue({ status: "error", message: "Measurement command failed" });
 
@@ -797,8 +801,9 @@ describe("ReviewPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByText("Could not read R2: Measurement command failed")).toBeInTheDocument();
-    expect(screen.getByText("R2 did not return a TDS reading.")).toBeInTheDocument();
+    await waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('"error":"Measurement command failed"')));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Measurement command failed|R2 did not return/)).not.toBeInTheDocument();
     expect(appMocks.executeSensor).toHaveBeenCalledWith("sensor-r2", "measure", { timeout: 30 });
   });
 
@@ -843,7 +848,7 @@ describe("ReviewPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("imports an R2 TDS reading from the configured native ReaPrime id when sensors are stale", async () => {
+  it("does not read from a saved sensor id without a current R2 connection", async () => {
     appMocks.data = appData({ settings: { ...defaultSkinSettings, r2SensorId: "F4:12:FA:FA:AC:E3" } });
     appMocks.executeSensor.mockResolvedValue({
       status: "ok",
@@ -855,8 +860,9 @@ describe("ReviewPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByDisplayValue("9.4")).toBeInTheDocument();
-    expect(appMocks.executeSensor).toHaveBeenCalledWith("F4:12:FA:FA:AC:E3", "measure", { timeout: 30 });
+    expect(screen.getByLabelText("TDS")).toHaveValue("");
+    expect(appMocks.executeSensor).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("imports an R2 TDS reading from a connected native R2 device when sensors are stale", async () => {
@@ -875,7 +881,7 @@ describe("ReviewPage", () => {
     expect(appMocks.executeSensor).toHaveBeenCalledWith("F4:12:FA:FA:AC:E3", "measure", { timeout: 30 });
   });
 
-  it("shows local R2 reading feedback in the extraction panel", async () => {
+  it("imports TDS directly without an extra R2 status message", async () => {
     const onReadR2 = vi.fn().mockResolvedValue(9.7);
     render(
       <ReviewPage
@@ -890,8 +896,8 @@ describe("ReviewPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByText("R2 TDS 9.7 imported.")).toBeInTheDocument();
-    expect(screen.getByLabelText("TDS")).toHaveValue("9.7");
+    await waitFor(() => expect(screen.getByLabelText("TDS")).toHaveValue("9.7"));
+    expect(screen.queryByText(/R2 TDS.*imported/)).not.toBeInTheDocument();
   });
 
   it("waits for the configured delay before automatically reading R2 after a brew", async () => {
@@ -921,12 +927,11 @@ describe("ReviewPage", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("R2 TDS 9.8 imported.")).toBeInTheDocument();
     expect(screen.getByLabelText("TDS")).toHaveValue("9.8");
     expect(onReadR2).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the automatic R2 timer when availability is stale while the review page opens", async () => {
+  it("does not start the automatic R2 timer while the device is unavailable", async () => {
     vi.useFakeTimers();
     const onReadR2 = vi.fn().mockResolvedValue(9.6);
     render(
@@ -948,8 +953,9 @@ describe("ReviewPage", () => {
       await Promise.resolve();
     });
 
-    expect(onReadR2).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("TDS")).toHaveValue("9.6");
+    expect(onReadR2).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("TDS")).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not start a second test when the automatic timer fires during a manual reading", async () => {
@@ -965,7 +971,7 @@ describe("ReviewPage", () => {
     expect(screen.getByLabelText("TDS")).toHaveValue("9.7");
   });
 
-  it("shows local feedback when R2 is unavailable", async () => {
+  it("does not display a message when the manual button is pressed without an R2", async () => {
     render(
       <ReviewPage
         shot={shot}
@@ -979,10 +985,10 @@ describe("ReviewPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("No DiFluid R2 sensor detected.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows an error when R2 does not return a TDS reading", async () => {
+  it("leaves the review unchanged without a banner when R2 returns no reading", async () => {
     appMocks.data = appData({ sensors: [r2Sensor] });
     appMocks.executeSensor.mockResolvedValue({ status: "ok", result: { reading: {} } });
 
@@ -991,6 +997,37 @@ describe("ReviewPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findAllByText("R2 did not return a TDS reading.")).toHaveLength(2);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Read from R2" })).toBeEnabled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("TDS")).toHaveValue("");
+  });
+
+  it("keeps raw API failures in the logs and preserves existing TDS", async () => {
+    globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__ = true;
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const diagnostic = 'POST /api/v1/sensors/plugin%3Adifluid-r2.reaplugin/execute failed: 404 {"error":"Sensor not found"}';
+    appMocks.data = appData({ sensors: [r2Sensor], shots: [{ ...shot, annotations: { ...shot.annotations, drinkTds: 8.6 } }] });
+    appMocks.executeSensor.mockRejectedValue(new Error(diagnostic));
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    await userEvent.click(screen.getByRole("button", { name: "Read from R2" }));
+    await waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('"event":"r2_measurement_failed"')));
+    expect(log.mock.calls.some(([entry]) => JSON.parse(String(entry).slice("[WorkFlow Skin] ".length)).error === diagnostic)).toBe(true);
+    expect(screen.getByLabelText("TDS")).toHaveValue("8.6");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/POST \/api|Sensor not found|Could not read R2/)).not.toBeInTheDocument();
+  });
+
+  it("cancels a queued automatic reading if the R2 disconnects during the delay", async () => {
+    vi.useFakeTimers();
+    const onReadR2 = vi.fn().mockResolvedValue(9.7);
+    const props = { shot, previousShots: [], onSaveAnnotations: vi.fn(), onUploadVisualizer: vi.fn(),
+      r2Sensor, onReadR2, autoReadR2: true, autoReadR2DelaySeconds: 20 };
+    const { rerender } = render(<ReviewPage {...props} r2Available />);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    rerender(<ReviewPage {...props} r2Available={false} />);
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(onReadR2).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

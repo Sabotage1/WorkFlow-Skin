@@ -2433,8 +2433,33 @@ describe("App shell", () => {
         expect.objectContaining({ method: "POST", body: JSON.stringify({ commandId: "measure", params: {} }) })
       );
     }
-    expect(screen.getByText("R2 TDS 9.8 imported.")).toBeInTheDocument();
+    expect(screen.getByLabelText("TDS")).toHaveValue("9.8");
   });
+
+  it.each(["saved ID only", "stale sensor metadata", "disconnected device", "unavailable device"])(
+    "does not automatically measure an offline R2 after a brew: %s", async (scenario) => {
+      vi.useFakeTimers();
+      const id = "plugin:difluid-r2.reaplugin:difluid-r2:F4:12:FA:FA:AC:E3";
+      const fetchState = mockReaFetch({ ...initialSettings, r2SensorId: id }, {
+        sensors: scenario === "saved ID only" ? [] : [{ ...detectedR2Sensor, id }],
+        devices: scenario.endsWith("device")
+          ? [{ id, name: "DiFluid R2", type: "sensor", state: scenario === "disconnected device" ? "disconnected" : "connected", available: false }]
+          : [],
+        machineState: { connected: true, state: { state: "espresso", substate: "pouring" } },
+        shots: []
+      });
+      render(<App />);
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      fetchState.setShots([{ id: "shot-with-r2-off", timestamp: "2026-10-31T10:00:00Z", workflow: {}, measurements: [] }]);
+      fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(fetchState.sensorExecuteCount).toBe(0);
+      expect(screen.queryByText(/Could not read R2|Sensor not found|R2 did not return|\/api\/v1\/sensors/)).not.toBeInTheDocument();
+      expect(screen.getByLabelText("TDS")).toHaveValue("");
+    }
+  );
 
   it("opens review as soon as espresso returns idle for milk profiles too", async () => {
     vi.useFakeTimers();
@@ -2481,6 +2506,7 @@ describe("App shell", () => {
   it("does not wake the machine when an R2 reading fails after entering sleep", async () => {
     const fetchState = mockReaFetch({ ...initialSettings, r2SensorId: "r2" }, {
       sensors: [detectedR2Sensor],
+      devices: [{ id: detectedR2Sensor.id, name: "DiFluid R2", type: "sensor", state: "connected" }],
       shots: [{ id: "r2-sleep-shot", timestamp: "2026-09-07T10:00:00Z", workflow: {}, measurements: [] }]
     });
     render(<App />);
@@ -2531,7 +2557,7 @@ describe("App shell", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Review" }));
     await userEvent.click(await screen.findByRole("button", { name: "Read from R2" }));
 
-    expect(await screen.findByText("R2 TDS 9.7 imported.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("TDS")).toHaveValue("9.7"));
     expect(fetchState.sensorExecuteCount).toBe(2);
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=true&quick=false",
