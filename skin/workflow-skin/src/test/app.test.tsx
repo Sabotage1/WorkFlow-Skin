@@ -3783,7 +3783,7 @@ describe("App shell", () => {
     fetchState.fetchMock.mockClear();
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Connected"), { timeout: 2500 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
@@ -3813,7 +3813,7 @@ describe("App shell", () => {
     fetchState.fetchMock.mockClear();
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Connected"), { timeout: 2500 });
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
@@ -4052,7 +4052,8 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale tared."));
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(1));
+    expect(screen.queryByText("Scale tared.")).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
     expect(fetchState.scaleTareCount).toBe(1);
   });
@@ -4069,7 +4070,8 @@ describe("App shell", () => {
     const scansBeforeTap = fetchState.scanCount;
     await userEvent.click(screen.getByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale tared."));
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(1));
+    expect(screen.queryByText("Scale tared.")).not.toBeInTheDocument();
     expect(fetchState.scaleTareCount).toBe(1);
     expect(fetchState.scanCount).toBe(scansBeforeTap);
   });
@@ -4087,7 +4089,8 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected and tared."), { timeout: 2500 });
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(2), { timeout: 2500 });
+    expect(screen.queryByText("Scale connected and tared.")).not.toBeInTheDocument();
     expect(fetchState.scaleTareCount).toBe(2);
   });
 
@@ -4115,26 +4118,47 @@ describe("App shell", () => {
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ deviceId: "acaia-lunar" }) })
       );
     });
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Scale connected."), { timeout: 2500 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scale" })).toHaveAttribute("title", "Scale: Connected"), { timeout: 2500 });
   });
 
-  it("keeps force scale connection usable when explicit connect returns 404 after scan", async () => {
+  it.each([404, 500])("logs a scale connect HTTP %s error without displaying it", async (status) => {
+    globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__ = true;
     const fetchState = mockReaFetch(initialSettings, {
       devices: [],
       scanDevicesResult: [{ id: "D4:41:89:DB:21:2E", name: "Acaia Pearl", type: "scale", state: "discovered" }],
-      connectDeviceStatus: 404
+      connectDeviceStatus: status
     });
     render(<App />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not connect scale:"), {
+    await waitFor(() => expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"scale_connection_failed"')), {
       timeout: 2500
     });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`failed: ${status}`));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not connect scale|\/api\/v1\/devices|Scanning for scale/)).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
       "http://localhost:8080/api/v1/devices/scan?connect=false&quick=false",
       expect.objectContaining({ method: "GET" })
     );
+  });
+
+  it.each([404, 500])("logs scale tare and recovery HTTP %s errors without a banner", async (status) => {
+    globalThis.__WORKFLOW_SKIN_ENABLE_TEST_LOGS__ = true;
+    const fetchState = mockReaFetch(initialSettings, {
+      appInfo: { version: "0.9.1" },
+      machineState: { connected: true, state: { state: "idle" } },
+      devices: [{ id: "primary", name: "BooKoo Mini", type: "scale", state: "connected" }],
+      scaleTareStatuses: [status, status]
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
+    await waitFor(() => expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"scale_tare_recovery_failed"')));
+    expect(fetchState.scaleTareCount).toBe(2);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`/api/v1/scale/tare failed: ${status}`));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not tare|\/api\/v1\/scale|Taring scale|Scale tared/)).not.toBeInTheDocument();
   });
 
   it.each([

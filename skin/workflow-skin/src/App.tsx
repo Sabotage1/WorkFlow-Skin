@@ -3042,81 +3042,79 @@ export function App() {
   }, [currentMachineMode, data.loaded, data.settings.autoSleepMinutes, machineConnected, page]);
 
   const forceScaleConnection = async () => {
-    setStatus({ type: "success", message: "Scanning for scale." });
+    skinLog("scale_manual_scan_started");
     try {
       const result = await requestScaleConnection({
         discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
-        onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
+        onDiscoveryRetry: () => skinLog("scale_manual_scan_retry"),
         forceDiscovery: true
       });
       if (result.canceled) return;
       if (result.connected) {
-        setStatus({ type: "success", message: "Scale connected." });
+        skinLog("scale_connection_succeeded");
         return;
       }
 
       if (result.pending) {
-        setStatus({ type: "success", message: "Waiting for the scale. Connection recovery continues automatically." });
+        skinLog("scale_connection_pending");
         return;
       }
 
       if (!result.found) {
         if (result.firstError) throw result.firstError;
-        setStatus({ type: "error", message: "No scale found after scan." });
+        skinLog("scale_manual_scan_not_found");
         return;
       }
 
       if (result.firstError) throw result.firstError;
-      setStatus({
-        type: "error",
-        message: result.requested
-          ? "Scale was found but did not report connected. Keep it awake and tap Scale again."
-          : "Scale was found but could not be connected. Keep it awake and tap Scale again."
-      });
+      skinLog("scale_connection_unconfirmed", { requested: result.requested });
     } catch (error) {
-      setStatus({ type: "error", message: `Could not connect scale: ${errorMessage(error)}` });
+      skinLog("scale_connection_failed", { error: errorMessage(error) });
     }
   };
 
   const tareScaleFromIndicator = async () => {
     setExpandedStatusId(null);
-    setStatus({ type: "success", message: "Taring scale." });
+    skinLog("scale_tare_started");
     try {
       await api.tareScale();
       await data.refreshConnectivity();
-      setStatus({ type: "success", message: "Scale tared." });
+      skinLog("scale_tare_succeeded");
     } catch (error) {
       skinLog("scale_tare_from_indicator_failed", { error: errorMessage(error) });
       if (error instanceof ReaPrimeApiError && error.status === 400 && error.message.includes("block_tare_during_shot")) {
-        setStatus({ type: "success", message: "Tare is disabled during the shot to preserve weight stop." });
+        skinLog("scale_tare_blocked", { reason: "block_tare_during_shot" });
         return;
       }
       try {
         const result = await requestScaleConnection({
           discoveryAttempts: MANUAL_DEVICE_DISCOVERY_ATTEMPTS,
-          onDiscoveryRetry: () => setStatus({ type: "success", message: "Still scanning for scale." }),
+          onDiscoveryRetry: () => skinLog("scale_manual_scan_retry"),
           forceDiscovery: true
         });
         if (result.canceled) return;
         if (result.connected) {
           await api.tareScale();
           await data.refreshConnectivity();
-          setStatus({ type: "success", message: "Scale connected and tared." });
+          skinLog("scale_tare_succeeded", { recovered: true });
           return;
         }
         if (result.pending) {
-          setStatus({ type: "success", message: "Waiting for the scale. Connection recovery continues automatically." });
+          skinLog("scale_connection_pending", { action: "tare" });
           return;
         }
         if (result.requested || result.found) {
-          setStatus({ type: "error", message: "Scale did not report connected. Keep it awake and tap Scale again." });
+          skinLog("scale_connection_unconfirmed", {
+            action: "tare", requested: result.requested,
+            error: result.firstError ? errorMessage(result.firstError) : undefined
+          });
           return;
         }
       } catch (connectError) {
-        setStatus({ type: "error", message: `Could not tare or connect scale: ${errorMessage(connectError)}` });
+        skinLog("scale_tare_recovery_failed", { error: errorMessage(connectError) });
         return;
       }
-      setStatus({ type: "error", message: `Could not tare scale: ${errorMessage(error)}` });
+      skinLog("scale_tare_recovery_not_found", { error: errorMessage(error) });
     }
   };
 

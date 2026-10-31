@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function nativeGateway(page: Page, version: string, preferred = true) {
-  const state = { awake: false, connected: false, scanning: false, scans: [] as URLSearchParams[], explicitConnects: 0, tares: 0, wakeRequests: 0, mode: "idle", staleInventory: false, blockTare: false };
+  const state = { awake: false, connected: false, scanning: false, scans: [] as URLSearchParams[], explicitConnects: 0, tares: 0, wakeRequests: 0, mode: "idle", staleInventory: false, blockTare: false, scanFailure: 0, tareFailure: 0, logs: [] as string[] };
+  page.on("console", (message) => state.logs.push(message.text()));
   const profile = { title: "Classic", steps: [{ name: "Pour", seconds: 25, pressure: 6, temperature: 93 }] };
   const workflow = { id: "morning", profile, context: { targetDoseWeight: 18, targetYield: 36 } };
   const devices = () => [
@@ -35,6 +36,10 @@ async function nativeGateway(page: Page, version: string, preferred = true) {
     else if (path === "/api/v1/devices") body = devices();
     else if (path === "/api/v1/devices/scan") {
       state.scans.push(url.searchParams);
+      if (state.scanFailure) {
+        await route.fulfill({ status: state.scanFailure, json: { error: "Scale Bluetooth transport unavailable" } });
+        return;
+      }
       state.scanning = true;
       // Emulate host-owned discovery/teardown/connection after the quick HTTP
       // acknowledgment. A discovery-only scan never adopts the scale.
@@ -49,6 +54,10 @@ async function nativeGateway(page: Page, version: string, preferred = true) {
       return;
     } else if (path === "/api/v1/scale/tare") {
       state.tares++;
+      if (state.tareFailure) {
+        await route.fulfill({ status: state.tareFailure, json: { error: "Scale tare failed: plugin disconnected" } });
+        return;
+      }
       if (state.blockTare) {
         await route.fulfill({ status: 400, json: { type: "block_tare_during_shot", error: "Tare blocked during shot" } });
         return;
@@ -78,7 +87,7 @@ for (const version of ["0.8.8", "0.9.0-beta.2"]) {
     gateway.awake = true;
     gateway.staleInventory = true;
     await page.getByRole("button", { name: "Scale", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Scale connected.");
+    await expect.poll(() => gateway.logs.some((line) => line.includes('"event":"scale_connection_succeeded"'))).toBe(true);
     await expect(page.getByRole("button", { name: "Scale", exact: true })).toHaveAttribute("title", "Scale: Connected");
     await page.getByRole("button", { name: "Scale", exact: true }).click();
     await expect.poll(() => gateway.tares).toBe(1);
@@ -118,15 +127,44 @@ test("joins the native app's running scale recovery without restarting its scan"
   // Only the host finishes its already-running connection work.
   gateway.scanning = false;
   gateway.connected = true;
-  await expect(page.getByRole("status")).toHaveText("Scale connected.");
+  await expect.poll(() => gateway.logs.some((line) => line.includes('"event":"scale_connection_succeeded"'))).toBe(true);
   expect(gateway.scans).toHaveLength(0);
   expect(gateway.explicitConnects).toBe(0);
   gateway.blockTare = true;
   await page.getByRole("button", { name: "Scale", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Tare is disabled during the shot to preserve weight stop.");
+  await expect.poll(() => gateway.logs.some((line) => line.includes('"event":"scale_tare_blocked"'))).toBe(true);
+  await expect(page.getByText(/Tare is disabled|Tare blocked during shot|block_tare_during_shot/)).toHaveCount(0);
   expect(gateway.tares).toBe(1);
   expect(gateway.scans).toHaveLength(0);
 });
+
+for (const action of ["scan", "tare"] as const) {
+  test(`scale ${action} failures stay in logs on Decaid 0.9.1`, async ({ page }, testInfo) => {
+    const gateway = await nativeGateway(page, "0.9.1", false);
+    gateway.awake = action === "tare";
+    await page.goto("/");
+    await expect.poll(() => gateway.scans.length).toBe(1);
+    await expect.poll(() => gateway.scanning).toBe(false);
+    const scale = page.getByRole("button", { name: "Scale", exact: true });
+    await expect(scale).toHaveAttribute("title", action === "tare" ? "Scale: Connected" : "Scale: Not connected");
+    if (action === "scan") {
+      // Finish the startup scan's native cooldown before testing a new failed
+      // request; otherwise the button correctly joins the existing recovery.
+      await page.waitForTimeout(2100);
+      gateway.scanFailure = 500;
+    } else gateway.tareFailure = 404;
+    await scale.click();
+    const event = action === "scan" ? "scale_connection_failed" : "scale_tare_recovery_failed";
+    await expect.poll(() => gateway.logs.filter((line) => line.startsWith("[WorkFlow Skin] ") && line.includes("scale_"))).toEqual(
+      expect.arrayContaining([expect.stringContaining(`"event":"${event}"`)])
+    );
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText(/Could not connect scale|Could not tare|\/api\/v1\/|Scale Bluetooth transport unavailable|Scale tare failed|Scanning for scale|Taring scale/)).toHaveCount(0);
+    await expect(scale).toHaveAttribute("title", action === "tare" ? "Scale: Connected" : "Scale: Not connected");
+    if (action === "tare") expect(gateway.tares).toBe(2);
+    await page.screenshot({ path: testInfo.outputPath(`scale-${action}-quiet-error.png`), fullPage: true });
+  });
+}
 
 test("pending Scale recovery respects external sleep without waking the machine", async ({ page }) => {
   await page.clock.install();
