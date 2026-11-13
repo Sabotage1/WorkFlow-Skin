@@ -111,7 +111,7 @@ export function BrewPage({
   onSelectDrinkWorkflow?: (workflow: DrinkWorkflow) => void;
   onActivateDrinkWorkflow?: (workflow: DrinkWorkflow) => void;
   onEditSlot: (index: number) => void;
-  onUpdateRecipe?: (recipe: { dose?: number; yield?: number }) => void;
+  onUpdateRecipe?: (recipe: { dose?: number; yield?: number }) => Promise<void> | void;
   onSelectBag?: (bagId: string) => void;
 }) {
   const selectedBag = bags.find((bag) => bag.id === workflow.context?.beanBatchId);
@@ -123,6 +123,7 @@ export function BrewPage({
   const [doseText, setDoseText] = useState(() => initialRecipe(workflow).dose);
   const [yieldText, setYieldText] = useState(() => initialRecipe(workflow).yield);
   const [ratioText, setRatioText] = useState(() => initialRecipe(workflow).ratio);
+  const [savingRecipe, setSavingRecipe] = useState(false);
   const recommendations = recommendProfiles({
     profiles: shownProfiles,
     shots,
@@ -136,7 +137,7 @@ export function BrewPage({
     setDoseText(nextRecipe.dose);
     setYieldText(nextRecipe.yield);
     setRatioText(nextRecipe.ratio);
-  }, [workflow.context?.targetDoseWeight, workflow.context?.targetYield, workflow.profile?.target_weight]);
+  }, [selectedProfileId, workflow.context?.targetDoseWeight, workflow.context?.targetYield, workflow.profile?.target_weight]);
 
   const updateDose = (value: string) => {
     setDoseText(value);
@@ -160,7 +161,7 @@ export function BrewPage({
   };
 
   return (
-    <div className="workflow-grid">
+    <fieldset className="workflow-grid brew-controls" disabled={savingRecipe}>
       <section className="panel wide">
         <h2>Presets</h2>
         <ProfilePresetGrid
@@ -248,8 +249,13 @@ export function BrewPage({
           </label>
         </div>
         {grinders.length > 0 && <MetricTile label="Grinders" value={`${grinders.length} configured`} />}
-        <button type="button" className="ghost-button recipe-save-button" onClick={() => onUpdateRecipe?.({ dose: cleanNumber(doseText), yield: cleanNumber(yieldText) })}>
-          Save recipe
+        <button type="button" className="ghost-button recipe-save-button" onClick={async () => {
+          setSavingRecipe(true);
+          try { await onUpdateRecipe?.({ dose: cleanNumber(doseText), yield: cleanNumber(yieldText) }); }
+          catch { /* The save handler displays the actionable error. */ }
+          finally { setSavingRecipe(false); }
+        }}>
+          {savingRecipe ? "Saving recipe…" : "Save recipe"}
         </button>
       </section>
       <section className="panel wide">
@@ -270,6 +276,6 @@ export function BrewPage({
           );
         })}
       </section>
-    </div>
+    </fieldset>
   );
 }

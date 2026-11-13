@@ -451,6 +451,18 @@ describe("ReaPrimeApi", () => {
     );
   });
 
+  it("routes a profile dose choice to the exact physical plugin device", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    const api = new ReaPrimeApi("http://machine:8080");
+    const deviceId = "plugin:atom65.reaplugin:atom65:AA/BB&CC";
+    const body = { profile: { title: "Espresso" } };
+    await api.callPluginEndpoint("atom65.reaplugin", "profile-settings", body, "POST", { deviceId });
+    expect(fetch).toHaveBeenCalledWith(
+      `http://machine:8080/api/v1/plugins/atom65.reaplugin/profile-settings?deviceId=${encodeURIComponent(deviceId)}`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) })
+    );
+  });
+
   it("executes sensor commands with raw Bluetooth-style sensor ids", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ status: "ok", result: { reading: { tds: 9.7 } } }), { status: 200 }));
     const api = new ReaPrimeApi("http://machine:8080");

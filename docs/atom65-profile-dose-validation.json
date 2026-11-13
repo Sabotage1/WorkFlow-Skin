@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-13",
+  "skin_version": "0.4.6",
+  "required_atom65_driver_version": "0.1.1",
+  "skin_tests_passed": 477,
+  "desktop_tablet_browser_tests_passed": 56,
+  "rest_telemetry_contracts_passed": 62,
+  "regressions": [
+    "Independent saved profile dose and yield",
+    "Switching profiles and browser reload",
+    "Stale workflow and settings refresh",
+    "Startup profile recipe and Work Flow brew steps",
+    "Pending save blocks Brew controls",
+    "Saving Brew recipe does not opt in to grinder sync"
+  ],
+  "installed_on_tablet": false,
+  "physical_grinder_tested": false,
+  "package": {
+    "name": "workflow-skin.zip",
+    "bytes": 522614,
+    "sha256": "866354c9fc728e9d6cddd627dcc5d4606d9699c4539fe49265962ba24b4729a3",
+    "zip_valid": true
+  },
+  "validation_stage": "Before release publication",
+  "companion_driver": {
+    "path": "integrations/atom65-profile-sync/atom65-profile-sync-0.1.1.zip",
+    "sha256": "7a4b2d81b9dde0b44ce9f78db45f6e5f09a9570ae01acf0d864530c8db0c060b"
+  },
+  "rest_telemetry_contract_versions": [
+    "v0.8.5",
+    "v0.8.6",
+    "v0.8.8",
+    "v0.9.0-beta.2",
+    "v0.9.0",
+    "v0.9.1",
+    "v0.9.2"
+  ]
+}

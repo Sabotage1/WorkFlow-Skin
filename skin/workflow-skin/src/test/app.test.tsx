@@ -616,6 +616,60 @@ const detectedScaleSensor: SensorListItem = {
 };
 
 describe("App shell", () => {
+  it("remembers each profile's saved Brew recipe instead of returning to the old 18.6 g dose", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings,
+      presetSlots: [{ label: "Light", profileId: "p1" }, { label: "Sweet", profileId: "p2" }]
+    }, { workflow: { profile: profiles[0].profile, context: { targetDoseWeight: 18.6, targetYield: 37.2, extras: { workflowSkin: { selectedProfileId: "p1" } } } } });
+    const view = render(<App />);
+    await screen.findByRole("button", { name: "Light Blooming" });
+    fireEvent.change(screen.getByLabelText("Dose"), { target: { value: "20" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() => expect(fetchState.savedSettings.profileWorkflows.p1).toMatchObject({ brewRecipe: { dose: 20, yield: 40 } }));
+    await userEvent.click(screen.getByRole("button", { name: "Sweet Classic" }));
+    fireEvent.change(screen.getByLabelText("Dose"), { target: { value: "21" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() => expect(fetchState.savedSettings.profileWorkflows.p2).toMatchObject({ brewRecipe: { dose: 21, yield: 42 } }));
+    await userEvent.click(screen.getByRole("button", { name: "Light Blooming" }));
+    await waitFor(() => expect(screen.getByLabelText("Dose")).toHaveValue("20"));
+    expect(screen.getByLabelText("Yield")).toHaveValue("40");
+    view.unmount();
+    fetchState.setWorkflow({ profile: profiles[1].profile, context: { targetDoseWeight: 18.6, targetYield: 37.2, extras: { workflowSkin: { selectedProfileId: "p2" } } } });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Light Blooming" }));
+    await waitFor(() => expect(screen.getByLabelText("Dose")).toHaveValue("20"));
+    expect(screen.getByLabelText("Yield")).toHaveValue("40");
+  });
+
+  it("restores the startup profile's saved recipe even when its profile is already selected", async () => {
+    const fetchState = mockReaFetch({
+      ...initialSettings, startupProfileId: "p1",
+      profileWorkflows: { p1: { milkBased: false, steamTimers: {}, brewRecipe: { dose: 20, yield: 44 } } }
+    }, { workflow: { profile: profiles[0].profile, context: { targetDoseWeight: 18.6, targetYield: 37.2, extras: { workflowSkin: { selectedProfileId: "p1" } } } } });
+    render(<App />);
+    await waitFor(() => expect(fetchState.workflow).toMatchObject({ context: { targetDoseWeight: 20, targetYield: 44 } }));
+    await waitFor(() => expect(screen.getByLabelText("Dose")).toHaveValue("20"));
+  });
+
+  it("keeps profile controls disabled until a recipe save is confirmed", async () => {
+    let releaseSave!: () => void;
+    const pending = new Promise<void>((resolve) => { releaseSave = resolve; });
+    const fetchState = mockReaFetch(initialSettings, {
+      workflow: { profile: profiles[0].profile, context: { targetDoseWeight: 18.6, targetYield: 37.2 } },
+      workflowUpdateDelay: () => pending
+    });
+    render(<App />);
+    await screen.findByRole("button", { name: "Light Blooming" });
+    fireEvent.change(screen.getByLabelText("Dose"), { target: { value: "20" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    expect(screen.getByRole("button", { name: "Light Blooming" })).toBeDisabled();
+    expect(screen.getByLabelText("Dose")).toBeDisabled();
+    expect(fetchState.savedSettings.profileWorkflows.p1).toBeUndefined();
+    await act(async () => { releaseSave(); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Light Blooming" })).toBeEnabled());
+    expect(fetchState.savedSettings.profileWorkflows.p1).toMatchObject({ brewRecipe: { dose: 20, yield: 40 } });
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(console, "log").mockImplementation(() => undefined);

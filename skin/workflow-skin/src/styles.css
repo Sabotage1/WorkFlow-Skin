@@ -1826,11 +1826,62 @@ textarea {
   gap: 12px;
 }
 
+.brew-controls {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.atom65-dose-editor {
+  padding: 16px 0;
+  border-block: 1px solid var(--skin-border);
+}
+
+.atom65-dose-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+  align-items: end;
+  gap: 16px;
+}
+
+.atom65-dose-fields label,
+.atom65-device-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.atom65-device-field {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 600px) {
+  .atom65-dose-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.atom65-dose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
 .profile-row-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.profile-row-header > strong {
+  flex: 1;
+  min-width: 120px;
+  overflow-wrap: anywhere;
 }
 
 .profile-workflow-controls,

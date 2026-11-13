@@ -8,9 +8,15 @@ export interface PresetSlot {
 
 export type SteamTimers = Record<string, number>;
 
+export interface BrewRecipe {
+  dose: number;
+  yield: number;
+}
+
 export interface ProfileWorkflowSettings {
   milkBased: boolean;
   steamTimers: SteamTimers;
+  brewRecipe?: BrewRecipe;
 }
 
 export type SkinThemeId = "default" | "slate" | "ruby";
@@ -378,9 +384,14 @@ function normalizeProfileWorkflows(value: unknown): Record<string, ProfileWorkfl
   const workflows: Record<string, ProfileWorkflowSettings> = {};
   for (const [profileId, workflow] of Object.entries(value)) {
     if (!isPlainRecord(workflow) || typeof workflow.milkBased !== "boolean") continue;
+    const recipe = workflow.brewRecipe;
+    const brewRecipe = isPlainRecord(recipe) && typeof recipe.dose === "number" && Number.isFinite(recipe.dose) && recipe.dose > 0 &&
+      typeof recipe.yield === "number" && Number.isFinite(recipe.yield) && recipe.yield > 0
+      ? { dose: recipe.dose, yield: recipe.yield } : undefined;
     workflows[profileId] = {
       milkBased: workflow.milkBased,
-      steamTimers: normalizeSteamTimers(workflow.steamTimers)
+      steamTimers: normalizeSteamTimers(workflow.steamTimers),
+      ...(brewRecipe ? { brewRecipe } : {})
     };
   }
 
@@ -446,7 +457,7 @@ export function profileWorkflowFor(settings: SkinSettings, profileId?: string): 
   if (!profileId) return { milkBased: false, steamTimers: cloneSteamTimers(DEFAULT_STEAM_TIMERS) };
   const workflow = settings.profileWorkflows[profileId];
   return workflow
-    ? { milkBased: workflow.milkBased, steamTimers: cloneSteamTimers(workflow.steamTimers) }
+    ? { milkBased: workflow.milkBased, steamTimers: cloneSteamTimers(workflow.steamTimers), ...(workflow.brewRecipe ? { brewRecipe: { ...workflow.brewRecipe } } : {}) }
     : { milkBased: false, steamTimers: cloneSteamTimers(DEFAULT_STEAM_TIMERS) };
 }
 

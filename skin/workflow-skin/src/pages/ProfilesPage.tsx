@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Atom65DoseEditor, type Atom65DoseIntegration } from "../components/Atom65DoseEditor";
 import type { JsonMap, Profile, ProfileRecord } from "../api/types";
 import { DEFAULT_STEAM_TIMERS, isProfileShown, profileWorkflowFor, type ProfileWorkflowSettings, type SkinSettings, type SteamTimers } from "../state/skinSettings";
 
@@ -116,7 +117,8 @@ export function ProfilesPage({
   onSetStartupProfile,
   onSetProfileShown,
   onUpdateProfileWorkflow,
-  onSaveProfile
+  onSaveProfile,
+  grinderDose
 }: {
   profiles: ProfileRecord[];
   settings: SkinSettings;
@@ -125,7 +127,9 @@ export function ProfilesPage({
   onSetProfileShown: (profileId: string, shown: boolean) => void;
   onUpdateProfileWorkflow: (profileId: string, workflow: ProfileWorkflowSettings) => void;
   onSaveProfile: (profileId: string, profile: Profile) => Promise<void> | void;
+  grinderDose?: Atom65DoseIntegration;
 }) {
+  const [grinderProfileId, setGrinderProfileId] = useState<string | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [savingProfileId, setSavingProfileId] = useState<string | null>(null);
@@ -247,6 +251,7 @@ export function ProfilesPage({
           <div className="list-row profile-workflow-row" role="group" aria-label={`${title} profile workflow`} key={profile.id}>
             <div className="profile-row-header">
               <strong>{title}</strong>
+              {grinderDose && <button type="button" className="ghost-button compact-button" aria-label={`${title} grinder dose`} aria-expanded={grinderProfileId === profile.id} onClick={() => setGrinderProfileId((current) => current === profile.id ? null : profile.id)}>Grinder dose</button>}
               <button
                 type="button"
                 className="ghost-button compact-button"
@@ -260,6 +265,7 @@ export function ProfilesPage({
                 Edit
               </button>
             </div>
+            {grinderDose && grinderProfileId === profile.id && <Atom65DoseEditor key={profile.id} profile={profile.profile} integration={grinderDose} />}
             <div className="profile-workflow-controls">
               <label className="inline-toggle">
                 <input

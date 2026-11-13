@@ -36,6 +36,18 @@ async function flushPromises() {
 }
 
 describe("useReaData", () => {
+  it("does not overwrite newly saved profile settings with an older full refresh", async () => {
+    const api = createApi();
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    let releaseProfiles!: () => void;
+    api.listProfiles.mockImplementationOnce(() => new Promise((resolve) => { releaseProfiles = () => resolve([]); }));
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refresh(); });
+    await act(async () => { await result.current.persistSettings({ ...result.current.settings, skinTitle: "New saved settings" }); });
+    await act(async () => { releaseProfiles(); await refresh; });
+    expect(result.current.settings.skinTitle).toBe("New saved settings");
+  });
   afterEach(() => {
     vi.useRealTimers();
   });

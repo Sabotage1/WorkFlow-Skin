@@ -1,4 +1,6 @@
 import type { MachineState, ProfileRecord, ShotRecord, WeightSnapshot, Workflow } from "../api/types";
+import type { ProfileWorkflowSettings } from "../state/skinSettings";
+import { workflowForSelectedProfile } from "./profileWorkflow";
 import {
   hotWaterSafetyDurationSeconds,
   type DrinkWorkflow,
@@ -30,6 +32,7 @@ export interface RunDrinkWorkflowOptions {
   api: DrinkWorkflowRunnerApi;
   workflow: DrinkWorkflow;
   profiles: ProfileRecord[];
+  profileWorkflows?: Record<string, ProfileWorkflowSettings>;
   isCanceled: () => boolean;
   onState: (state: DrinkWorkflowRunState) => void;
   onBrewProfileSelected?: (profileId: string) => void;
@@ -195,25 +198,14 @@ async function prepareStep(
   api: DrinkWorkflowRunnerApi,
   step: DrinkWorkflowStep,
   profiles: ProfileRecord[],
-  callbacks: Pick<RunDrinkWorkflowOptions, "onBrewProfileSelected" | "onWorkflowUpdated">
+  callbacks: Pick<RunDrinkWorkflowOptions, "onBrewProfileSelected" | "onWorkflowUpdated" | "profileWorkflows">
 ): Promise<BrewStartMarker | null> {
   if (step.type === "brew") {
     const profile = profiles.find((item) => item.id === step.profileId);
     if (!profile) throw new Error("The selected brew profile is no longer available.");
     const currentWorkflow = await api.getWorkflow();
-    const extras = currentWorkflow.context?.extras ?? {};
-    const workflowSkin = extras.workflowSkin && typeof extras.workflowSkin === "object" && !Array.isArray(extras.workflowSkin) ? extras.workflowSkin : {};
     callbacks.onBrewProfileSelected?.(profile.id);
-    const updated = await api.updateWorkflow({
-      profile: profile.profile,
-      context: {
-        ...currentWorkflow.context,
-        extras: {
-          ...extras,
-          workflowSkin: { ...workflowSkin, selectedProfileId: profile.id }
-        }
-      }
-    });
+    const updated = await api.updateWorkflow(workflowForSelectedProfile(currentWorkflow, profile, callbacks.profileWorkflows?.[profile.id]));
     callbacks.onWorkflowUpdated?.(updated);
     const startedAt = Date.now();
     const latest = await api.getLatestShot().catch(() => null);

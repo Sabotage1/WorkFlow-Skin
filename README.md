@@ -6,11 +6,20 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.4.4](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.4)
+- [WorkFlow Skin v0.4.6](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.6)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
-Version 0.4.4 keeps scale scan, connection and tare messages in the structured
+Version 0.4.6 remembers saved Brew dose and yield per profile, including across
+profile switches, startup selection, and Work Flow brew steps. Older background
+refreshes cannot overwrite a newly saved recipe.
+
+Profiles also include opt-in Atom65 grinder choices: leave unchanged (default),
+follow the Brew dose, or use a fixed grind weight. Install the companion
+[Atom65 Profile Sync 0.1.1 update](integrations/atom65-profile-sync/README.md)
+for the grinder controls. See the [profile dose and validation notes](docs/atom65-profile-dose.md).
+
+It retains the 0.4.4 changes that keep scale scan, connection and tare messages in the structured
 logs, alongside the R2 diagnostics. Raw HTTP errors and connection progress no
 longer appear in page banners. The scale indicator still shows connection state,
 and reconnect, tare and tare blocking during a shot retain their behavior.
@@ -82,6 +91,10 @@ The Profiles page lets users:
 - Choose a startup profile.
 - Enable or disable post-shot review behavior per profile.
 - Mark profiles as milk-focused and configure steam timers.
+- Save dose and yield from Brew per profile; switching profiles and startup selection restore the saved recipe.
+- Set each profile’s Atom65 grinder dose choice: leave unchanged (default), follow the Brew coffee dose, or use a fixed grind weight.
+
+For grinder choices, open **Profiles → Grinder dose** next to the recipe, choose a mode and save. This requires **Atom65 Profile Sync 0.1.1 or later**, connected through Decaid. Choices are stored by the driver per physical grinder and recipe, including across restarts. Editing an inactive recipe’s choice does not select it or send its dose; selecting an enabled recipe updates CUSTOM. A renamed or edited recipe requires a new opt-in. Fixed grinder weights leave the Brew dose unchanged. Driver pauses remain in effect.
 
 ### Bag Tracking
 
@@ -376,4 +389,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.4.4 keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.4.6 adds per-profile saved Brew recipes and opt-in Atom65 grinder dose controls. It keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.

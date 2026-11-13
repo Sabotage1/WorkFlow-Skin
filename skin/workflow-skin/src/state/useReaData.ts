@@ -88,6 +88,7 @@ export function useReaData(api: ReaPrimeApi) {
   const [shots, setShots] = useState<ShotRecord[]>([]);
   const [steams, setSteams] = useState<SteamRecord[]>([]);
   const [settings, setSettings] = useState<SkinSettings>(defaultSkinSettings);
+  const settingsRevisionRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -148,6 +149,7 @@ export function useReaData(api: ReaPrimeApi) {
 
   const refreshInitial = useCallback(async () => {
     const revision = workflowRevisionRef.current;
+    const settingsRevision = settingsRevisionRef.current;
     try {
       const [profileList, workflowData, savedSettings, state] = await Promise.all([
         api.listProfiles(),
@@ -158,7 +160,7 @@ export function useReaData(api: ReaPrimeApi) {
       setProfiles(profileList);
       if (workflowRevisionRef.current === revision) setWorkflow(workflowData);
       setMachineState(state);
-      setSettings(savedSettings);
+      if (settingsRevisionRef.current === settingsRevision) setSettings(savedSettings);
       setError(null);
       setLoaded(true);
       // Optional display and peripheral reads must not block presets at boot.
@@ -176,6 +178,7 @@ export function useReaData(api: ReaPrimeApi) {
 
   const refreshAll = useCallback(async () => {
     const revision = workflowRevisionRef.current;
+    const settingsRevision = settingsRevisionRef.current;
     try {
       const [
         profileList,
@@ -241,7 +244,7 @@ export function useReaData(api: ReaPrimeApi) {
       setMachineState(state);
       setShots(shotResult.items);
       setSteams(steamList);
-      setSettings(savedSettings);
+      if (settingsRevisionRef.current === settingsRevision) setSettings(savedSettings);
       setError(shotResult.error);
       setLoaded(true);
     } catch (err) {
@@ -311,6 +314,7 @@ export function useReaData(api: ReaPrimeApi) {
   const persistSettings = useCallback(
     async (next: SkinSettings) => {
       await saveSkinSettings(api, next);
+      settingsRevisionRef.current += 1;
       setSettings(next);
     },
     [api]

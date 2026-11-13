@@ -48,11 +48,11 @@ describe("drink Work Flow runner", () => {
     };
     const states: DrinkWorkflowRunState[] = [];
 
-    await settle(runDrinkWorkflow({ api, workflow, profiles, isCanceled: () => false, onState: (state) => states.push(state) }));
+    await settle(runDrinkWorkflow({ api, workflow, profiles, profileWorkflows: { p1: { milkBased: false, steamTimers: {}, brewRecipe: { dose: 20, yield: 42 } } }, isCanceled: () => false, onState: (state) => states.push(state) }));
 
     expect(api.tareScale).toHaveBeenCalledTimes(2);
     expect(api.requestMachineState.mock.calls.map(([state]) => state)).toEqual(["espresso", "hotWater"]);
-    expect(api.updateWorkflow).toHaveBeenCalledWith(expect.objectContaining({ profile: profiles[0].profile }));
+    expect(api.updateWorkflow).toHaveBeenCalledWith(expect.objectContaining({ profile: profiles[0].profile, context: expect.objectContaining({ targetDoseWeight: 20, targetYield: 42 }) }));
     expect(api.updateWorkflow).toHaveBeenCalledWith({
       hotWaterData: { targetTemperature: 82, duration: 30, volume: 120, flow: 6 }
     });

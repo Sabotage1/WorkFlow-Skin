@@ -75,6 +75,7 @@ import {
 import { isActiveShotLifecycle, isFinishedShotLifecycle } from "./lib/shotLifecycle";
 import { grindSizeFromShot, shotStats } from "./lib/shotStats";
 import { resolveDisplayedProfileId, selectedProfileIdFromWorkflow, type CompletedWorkflowActivity } from "./lib/workflowRouting";
+import { workflowForSelectedProfile } from "./lib/profileWorkflow";
 import { BagsPage } from "./pages/BagsPage";
 import { BrewPage } from "./pages/BrewPage";
 import { CommunityPage, type UploadDraft } from "./pages/CommunityPage";
@@ -528,24 +529,6 @@ function communityUploadDraftFromShot(shot: ShotRecord, profiles: ProfileRecord[
   };
 }
 
-function workflowForSelectedProfile(workflow: Workflow, profile: ProfileRecord): Workflow {
-  const extras = workflow.context?.extras ?? {};
-  const workflowSkin = extras.workflowSkin && typeof extras.workflowSkin === "object" && !Array.isArray(extras.workflowSkin) ? extras.workflowSkin : {};
-  return {
-    profile: profile.profile,
-    context: {
-      ...workflow.context,
-      extras: {
-        ...extras,
-        workflowSkin: {
-          ...workflowSkin,
-          selectedProfileId: profile.id
-        }
-      }
-    }
-  };
-}
-
 function formatTopNumber(value: number | null | undefined, unit: string): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : "—";
 }
@@ -813,7 +796,7 @@ export function App() {
   });
   const displayedProfile = selectedProfileId ? data.profiles.find((profile) => profile.id === selectedProfileId) : undefined;
   const displayWorkflow = displayedProfile && selectedProfileId !== workflowSelectedProfileId
-    ? workflowForSelectedProfile(data.workflow, displayedProfile)
+    ? workflowForSelectedProfile(data.workflow, displayedProfile, data.settings.profileWorkflows[displayedProfile.id])
     : data.workflow;
   const workflowPageProfileId = selectedProfileId ?? (page === "steam" || page === "review" ? lastCompletedProfileId : undefined);
   const activeProfile = data.profiles.find((profile) => profile.id === workflowPageProfileId);
@@ -1251,7 +1234,7 @@ export function App() {
     profile: ProfileRecord,
     options: { optimistic?: boolean; commitIf?: () => boolean; onDiscardedUpdate?: () => Promise<void> | void } = {}
   ) => {
-    const nextWorkflow = workflowForSelectedProfile(data.workflow, profile);
+    const nextWorkflow = workflowForSelectedProfile(data.workflow, profile, data.settings.profileWorkflows[profile.id]);
     const previousWorkflow = data.workflow;
     if (options.optimistic) data.setWorkflow(nextWorkflow);
 
@@ -1303,9 +1286,9 @@ export function App() {
     if (!manualProfile) return;
 
     setStartupProfileHoldId(null);
-    const updatedWorkflow = await api.updateWorkflow(workflowForSelectedProfile(workflow, manualProfile));
+    const updatedWorkflow = await api.updateWorkflow(workflowForSelectedProfile(workflow, manualProfile, data.settings.profileWorkflows[manualProfile.id]));
     if (selection === manualProfileSelectionRef.current) data.setWorkflow(updatedWorkflow);
-  }, [api, data.profiles, data.setWorkflow, resetStartupProfileApply]);
+  }, [api, data.profiles, data.settings.profileWorkflows, data.setWorkflow, resetStartupProfileApply]);
 
   const enqueueDeviceConnection = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
     const result = deviceConnectionQueueRef.current.then(task, task);
@@ -1569,14 +1552,18 @@ export function App() {
         return;
       }
       let confirmed = workflow;
-      if (selectedProfileIdFromWorkflow(workflow, data.profiles) !== startupProfileId) {
-        confirmed = await api.updateWorkflow(workflowForSelectedProfile(workflow, startupProfile));
+      const startupRecipe = data.settings.profileWorkflows[startupProfile.id]?.brewRecipe;
+      const startupWorkflow = workflowForSelectedProfile(workflow, startupProfile, data.settings.profileWorkflows[startupProfile.id]);
+      if (selectedProfileIdFromWorkflow(workflow, data.profiles) !== startupProfileId ||
+          workflow.context?.targetDoseWeight !== startupWorkflow.context?.targetDoseWeight || workflow.context?.targetYield !== startupWorkflow.context?.targetYield) {
+        confirmed = await api.updateWorkflow(startupWorkflow);
         if (!isCurrent()) {
           if (startupMountedRef.current && manualProfileSelectionRef.current.version !== selectionVersion) await reapplyManualProfileSelection();
           return;
         }
       }
-      if (selectedProfileIdFromWorkflow(confirmed, data.profiles) !== startupProfileId) {
+      if (selectedProfileIdFromWorkflow(confirmed, data.profiles) !== startupProfileId ||
+          (startupRecipe && (confirmed.context?.targetDoseWeight !== startupRecipe.dose || confirmed.context?.targetYield !== startupRecipe.yield))) {
         throw new ReaPrimeApiError("The app has not confirmed the startup profile yet", 503);
       }
       data.setWorkflow(confirmed);
@@ -2145,6 +2132,7 @@ export function App() {
         api,
         workflow,
         profiles: data.profiles,
+        profileWorkflows: data.settings.profileWorkflows,
         isCanceled: () => drinkWorkflowRunTokenRef.current !== token,
         onState: (next) => {
           if (drinkWorkflowRunTokenRef.current === token) setDrinkWorkflowRun(next);
@@ -3303,14 +3291,28 @@ export function App() {
             }}
             grinders={data.grinders ?? []}
             onUpdateRecipe={async ({ dose, yield: targetYield }) => {
-              await api.updateWorkflow({
-                context: {
-                  ...data.workflow.context,
-                  targetDoseWeight: dose,
-                  targetYield
-                }
-              });
-              await data.refresh();
+              setStatus(null);
+              try {
+                if (!dose || dose <= 0 || !Number.isFinite(dose) || !targetYield || targetYield <= 0 || !Number.isFinite(targetYield)) throw new Error("Enter a positive dose and yield before saving.");
+                const profileId = selectedProfileIdFromWorkflow(displayWorkflow, data.profiles);
+                if (!profileId) throw new Error("Select a profile before saving its recipe.");
+                const updated = await api.updateWorkflow({
+                  context: { ...displayWorkflow.context, targetDoseWeight: dose, targetYield }
+                });
+                if (updated.context?.targetDoseWeight !== dose || updated.context?.targetYield !== targetYield) throw new Error("The app has not confirmed the new dose and yield. Try saving again.");
+                data.setWorkflow({ ...displayWorkflow, ...updated });
+                await data.persistSettings({
+                  ...data.settings,
+                  profileWorkflows: {
+                    ...data.settings.profileWorkflows,
+                    [profileId]: { ...profileWorkflowFor(data.settings, profileId), brewRecipe: { dose, yield: targetYield } }
+                  }
+                });
+                setStatus({ type: "success", message: "Recipe saved for this profile." });
+              } catch (error) {
+                setStatus({ type: "error", message: `Could not save recipe: ${errorMessage(error)}` });
+                throw error;
+              }
             }}
             onSelectBag={async (bagId) => {
               const bag = data.bags.find((item) => item.id === bagId);
@@ -3418,6 +3420,11 @@ export function App() {
             onSetProfileShown={setProfileShown}
             onUpdateProfileWorkflow={updateProfileWorkflow}
             onSaveProfile={saveProfile}
+            grinderDose={{
+              api,
+              devices: data.devices ?? [],
+              supported: Boolean(data.plugins?.some((plugin) => plugin.id === "atom65.reaplugin" && plugin.loaded !== false && plugin.api?.some((endpoint) => endpoint.id === "profile-settings")))
+            }}
           />
         )}
         {page === "history" && <HistoryPage shots={data.shots} bags={data.bags} onOpenShot={(shot) => void openHistoryShotReview(shot)} onRecommendShot={recommendHistoryShot} />}

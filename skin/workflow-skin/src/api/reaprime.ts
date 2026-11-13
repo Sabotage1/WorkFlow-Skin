@@ -532,8 +532,9 @@ export class ReaPrimeApi {
     return this.request<T>(`/api/v1/plugins/${encodeURIComponent(pluginId)}/settings`);
   }
 
-  callPluginEndpoint<T = JsonMap>(pluginId: string, endpoint: string, body?: unknown, method = body === undefined ? "GET" : "POST") {
-    return this.request<T>(`/api/v1/plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(endpoint)}`, {
+  callPluginEndpoint<T = JsonMap>(pluginId: string, endpoint: string, body?: unknown, method = body === undefined ? "GET" : "POST", query?: Record<string, string>) {
+    const search = query ? `?${new URLSearchParams(query)}` : "";
+    return this.request<T>(`/api/v1/plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(endpoint)}${search}`, {
       method,
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });

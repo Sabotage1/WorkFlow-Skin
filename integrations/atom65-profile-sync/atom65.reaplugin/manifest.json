@@ -1,0 +1,83 @@
+{
+  "id": "atom65.reaplugin",
+  "name": "Atom65 Profile Sync",
+  "author": "Roy Ackerman",
+  "description": "Dose-only Bluetooth driver for the custom Atom65 GBW controller. Each Decaid profile opts in separately; other profiles leave the grinder unchanged.",
+  "version": "0.1.1",
+  "apiVersion": 1,
+  "permissions": [
+    "api",
+    "transport.ble",
+    "pluginStorage",
+    "events.workflow",
+    "log"
+  ],
+  "drivers": [
+    {
+      "id": "atom65",
+      "type": "grinder",
+      "capabilities": [],
+      "ble": {
+        "match": {
+          "serviceUuids": [
+            "5e5d6500-3f45-4b8c-9a65-28b4858d23d4"
+          ]
+        }
+      },
+      "surfaces": [
+        {
+          "id": "settings",
+          "role": "settings",
+          "label": "Profile dose sync",
+          "endpoint": "device-settings"
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "SyncEnabled": {
+      "type": "boolean",
+      "label": "Enable profile dose syncing",
+      "description": "Master switch. Only profiles you explicitly enable in Device settings can change the grinder. Turning this off cancels unsent updates.",
+      "default": true
+    },
+    "MaximumDose": {
+      "type": "number",
+      "label": "Maximum synced dose (g)",
+      "description": "Reject doses above this value instead of clamping them. Default 40 g; allowed range 5 to 1000 g, further limited by the controller's advertised range.",
+      "default": 40
+    }
+  },
+  "api": [
+    {
+      "id": "device-settings",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "status",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "configure",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "sync",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "skin",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "profile-settings",
+      "type": "http",
+      "data": {}
+    }
+  ]
+}

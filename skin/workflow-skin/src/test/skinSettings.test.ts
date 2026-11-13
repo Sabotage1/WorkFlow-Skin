@@ -16,6 +16,25 @@ import {
 } from "../state/skinSettings";
 
 describe("skin settings", () => {
+  it("round-trips profile recipes and preserves them when editing other workflow settings", async () => {
+    const api = { getKv: vi.fn().mockResolvedValue({
+      profileWorkflows: {
+        p1: { milkBased: true, steamTimers: { small: 20 }, brewRecipe: { dose: 20, yield: 45 } },
+        p2: { milkBased: false, steamTimers: {}, brewRecipe: { dose: "18.6", yield: 37.2 } }
+      }
+    }), putKv: vi.fn() };
+    const settings = await loadSkinSettings(api);
+    expect(settings.profileWorkflows.p1.brewRecipe).toEqual({ dose: 20, yield: 45 });
+    expect(settings.profileWorkflows.p2.brewRecipe).toBeUndefined();
+    const edited = profileWorkflowFor(settings, "p1");
+    edited.milkBased = false;
+    edited.brewRecipe!.dose = 21;
+    expect(settings.profileWorkflows.p1.brewRecipe?.dose).toBe(20);
+    await saveSkinSettings(api, { ...settings, profileWorkflows: { ...settings.profileWorkflows, p1: edited } });
+    expect(api.putKv).toHaveBeenCalledWith("workflow-skin", "settings", expect.objectContaining({
+      profileWorkflows: expect.objectContaining({ p1: expect.objectContaining({ brewRecipe: { dose: 21, yield: 45 } }) })
+    }));
+  });
   it("has post-shot review enabled by default", () => {
     expect(defaultSkinSettings.reviewEnabledByProfile).toEqual({});
     expect(defaultSkinSettings.defaultReviewEnabled).toBe(true);
