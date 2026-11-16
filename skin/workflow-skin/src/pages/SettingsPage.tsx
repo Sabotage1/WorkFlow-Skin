@@ -99,7 +99,10 @@ function normalizeAdvancedMachineSettingsDraft(settings: De1AdvancedMachineSetti
     heaterIdleTemp: boundedNumber(settings?.heaterIdleTemp, defaultAdvancedMachineSettings.heaterIdleTemp, 0, 110),
     heaterPh2Timeout: boundedNumber(settings?.heaterPh2Timeout, defaultAdvancedMachineSettings.heaterPh2Timeout, 0, 120),
     heaterVoltage: boundedNumber(settings?.heaterVoltage, defaultAdvancedMachineSettings.heaterVoltage, 100, 260),
-    refillKitSetting: Math.round(boundedNumber(settings?.refillKitSetting, defaultAdvancedMachineSettings.refillKitSetting, 0, 3))
+    refillKitSetting:
+      settings?.refillKitSetting === 0 || settings?.refillKitSetting === 1
+        ? settings.refillKitSetting
+        : defaultAdvancedMachineSettings.refillKitSetting
   };
 }
 
@@ -605,9 +608,8 @@ export function SettingsPage({
                     onChange={(event) => updateAdvancedMachineDraft({ refillKitSetting: Number(event.target.value) })}
                   >
                     <option value="0">Off</option>
-                    <option value="1">Manual</option>
+                    <option value="1">Always on</option>
                     <option value="2">Automatic</option>
-                    <option value="3">Always on</option>
                   </select>
                 </label>
                 <label className="settings-field">

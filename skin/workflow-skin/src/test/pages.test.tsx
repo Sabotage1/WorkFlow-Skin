@@ -1090,6 +1090,55 @@ describe("SettingsPage", () => {
     expect(screen.getByText("DiFluid R2 status")).toBeInTheDocument();
   });
 
+  it.each([
+    ["Off", 0],
+    ["Always on", 1],
+    ["Automatic", 2]
+  ])("saves refill kit mode %s using Decaid value %i", async (label, value) => {
+    const onSaveMachineSettings = vi.fn();
+    render(
+      <SettingsPage
+        settings={defaultSkinSettings}
+        r2Sensor={null}
+        onUpdateSettings={vi.fn()}
+        advancedMachineSettings={{ refillKitSetting: 2 }}
+        onSaveMachineSettings={onSaveMachineSettings}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand these advanced settings/i }));
+    const refillKit = screen.getByLabelText("Refill kit");
+    await userEvent.selectOptions(refillKit, within(refillKit).getByRole("option", { name: label }));
+    await userEvent.click(screen.getByRole("button", { name: "Save machine settings" }));
+
+    expect(onSaveMachineSettings).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ refillKitSetting: value }),
+      expect.any(Object)
+    );
+  });
+
+  it.each([0, 1, 2, 3, -1, 1.5, Number.NaN, undefined])("loads refill kit value %s using a supported mode", async (value) => {
+    render(
+      <SettingsPage
+        settings={defaultSkinSettings}
+        r2Sensor={null}
+        onUpdateSettings={vi.fn()}
+        advancedMachineSettings={{ refillKitSetting: value }}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand these advanced settings/i }));
+
+    const selectedValue = value === 0 || value === 1 ? value : 2;
+    expect(screen.getByLabelText("Refill kit")).toHaveValue(String(selectedValue));
+    expect(within(screen.getByLabelText("Refill kit")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Off",
+      "Always on",
+      "Automatic"
+    ]);
+  });
+
   it("edits the community API setting without exposing skin updater controls", async () => {
     const onUpdateSettings = vi.fn();
     render(

@@ -343,7 +343,11 @@ function mockReaFetch(
     }
     if (method === "GET" && url.pathname === "/api/v1/machine/settings/advanced") return responseJson(advancedMachineSettings);
     if (method === "POST" && url.pathname === "/api/v1/machine/settings/advanced") {
-      advancedMachineSettings = { ...advancedMachineSettings, ...JSON.parse(String(init.body)) };
+      const body = JSON.parse(String(init.body));
+      if (body.refillKitSetting != null && ![0, 1, 2].includes(body.refillKitSetting)) {
+        return responseJson({ error: "refillKitSetting must be 0 (force off), 1 (force on) or 2 (auto)" }, 400);
+      }
+      advancedMachineSettings = { ...advancedMachineSettings, ...body };
       return Promise.resolve(new Response("", { status: 200 }));
     }
     if (method === "DELETE" && url.pathname === "/api/v1/machine/settings/reset") {
@@ -3470,6 +3474,28 @@ describe("App shell", () => {
       "http://localhost:8080/api/v1/machine/calibration",
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"flowMultiplier":1.08') })
     );
+  });
+
+  it("keeps Always on after saving and reopening refill kit settings", async () => {
+    const fetchState = mockReaFetch(initialSettings);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand these advanced settings/i }));
+    await userEvent.selectOptions(screen.getByLabelText("Refill kit"), screen.getByRole("option", { name: "Always on" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save machine settings" }));
+
+    expect(await screen.findByText("Machine settings saved.")).toBeInTheDocument();
+    expect(fetchState.fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8080/api/v1/machine/settings/advanced",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"refillKitSetting":1') })
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Brew" }));
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand these advanced settings/i }));
+    expect(screen.getByLabelText("Refill kit")).toHaveValue("1");
+    expect(within(screen.getByLabelText("Refill kit")).getByRole("option", { selected: true })).toHaveTextContent("Always on");
   });
 
   it("refreshes and connects the R2 sensor from settings", async () => {
