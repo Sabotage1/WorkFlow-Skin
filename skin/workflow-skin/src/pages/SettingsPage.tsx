@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type {
   De1AdvancedMachineSettings,
   De1MachineCalibration,
@@ -35,7 +35,7 @@ import {
   topStatusIndicatorIdsForSettings
 } from "../state/skinSettings";
 
-type SettingsSection = "machine" | "app" | "skin";
+type SettingsSection = "machine" | "app" | "skin" | "updates";
 
 const themeColorFields: Array<{ key: keyof Omit<SkinThemePalette, "name">; label: string }> = [
   { key: "background", label: "Background" },
@@ -222,7 +222,9 @@ export function SettingsPage({
   advancedMachineSettings,
   machineCalibration,
   onSaveMachineSettings,
-  onResetMachineSettings
+  onResetMachineSettings,
+  updatesPanel,
+  initialSection = "machine"
 }: {
   settings: SkinSettings;
   r2Sensor: SensorListItem | null;
@@ -242,8 +244,10 @@ export function SettingsPage({
     machineCalibration: De1MachineCalibration
   ) => Promise<void> | void;
   onResetMachineSettings?: () => Promise<void> | void;
+  updatesPanel?: ReactNode;
+  initialSection?: SettingsSection;
 }) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("machine");
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [draftSettings, setDraftSettings] = useState(settings);
   const [acknowledgedSettings, setAcknowledgedSettings] = useState(settings);
   const [machineDraft, setMachineDraft] = useState(() => normalizeMachineSettingsDraft(machineSettings));
@@ -368,7 +372,8 @@ export function SettingsPage({
         {[
           ["machine", "Machine settings"],
           ["app", "App settings"],
-          ["skin", "Skin settings"]
+          ["skin", "Skin settings"],
+          ["updates", "Updates"]
         ].map(([section, label]) => (
           <button
             type="button"
@@ -836,11 +841,13 @@ export function SettingsPage({
         </section>
       )}
 
-      <div className="settings-save-actions">
+      {activeSection === "updates" && <section className="settings-section" role="tabpanel" aria-label="Updates">{updatesPanel}</section>}
+
+      {activeSection !== "updates" && <div className="settings-save-actions">
         <button type="button" className="primary-button settings-save-button" disabled={!settingsChanged} onClick={saveSettings}>
           Save settings
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

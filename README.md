@@ -6,11 +6,17 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.4.7](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.7)
+- [WorkFlow Skin v0.4.8](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.8)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
-Version 0.4.7 fixes the refill kit's **Always on** setting being rejected and
+Version 0.4.8 adds **Settings → Updates** for DE1 firmware and the Decaid app.
+It shows installed versions, firmware availability and release notes, supports
+managed firmware installation or manual file upload, and displays progress and
+cancellation. Android builds that support app installation can update Decaid;
+other builds provide a release link. See the [Updates screen notes](docs/settings-updates.md).
+
+It retains the 0.4.7 fix for the refill kit's **Always on** setting being rejected and
 returning to **Automatic** after refresh. The choices now match Decaid: Off (`0`),
 Always on (`1`), and Automatic (`2`). The incorrectly labelled Manual choice has
 been removed. After updating, select Always on again and save machine settings.
@@ -394,4 +400,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.4.7 fixes the refill kit Always on setting and keeps per-profile saved Brew recipes and opt-in Atom65 grinder dose controls. It keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.4.8 adds a firmware and Decaid Updates screen in Settings. It keeps the refill kit Always on fix, per-profile saved Brew recipes and opt-in Atom65 grinder dose controls. It keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.

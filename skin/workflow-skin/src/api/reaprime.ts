@@ -23,6 +23,7 @@ import type {
   UpdateDe1MachineSettings,
   Workflow
 } from "./types";
+import { readFirmwareProgress, type AppUpdateState, type FirmwareCatalog, type FirmwareProgressEvent } from "./updateTypes";
 
 export interface CreateBeanPayload {
   roaster: string;
@@ -178,6 +179,45 @@ export class ReaPrimeApi {
 
   listProfiles() {
     return this.request<ProfileRecord[]>("/api/v1/profiles");
+  }
+
+  getFirmwareCatalog() {
+    return this.request<FirmwareCatalog>("/api/v1/machine/firmware", {}, 8000);
+  }
+
+  getFirmwareMachineInfo() {
+    return this.request<{ model?: string; version?: string }>("/api/v1/machine/info", {}, 5000);
+  }
+
+  getAppUpdateState() {
+    return this.request<AppUpdateState>("/api/v1/update", {}, 8000);
+  }
+
+  appUpdateSocketUrl() {
+    const url = new URL(this.baseUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return `${url.origin}/ws/v1/update`;
+  }
+
+  async streamFirmwareUpdate(
+    source: { artifactId: string } | { file: Blob },
+    onProgress: (event: FirmwareProgressEvent) => void,
+    signal: AbortSignal
+  ) {
+    const managed = "artifactId" in source;
+    const path = managed ? "/api/v1/machine/firmware/apply" : "/api/v1/machine/firmware";
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": managed ? "application/json" : "application/octet-stream" },
+      body: managed ? JSON.stringify({ artifactId: source.artifactId, force: false }) : source.file,
+      signal
+    });
+    if (!response.ok) throw new ReaPrimeApiError("Decaid could not start the firmware update.", response.status);
+    await readFirmwareProgress(response, onProgress);
+  }
+
+  cancelFirmwareUpdate() {
+    return this.request<{ operation: FirmwareCatalog["operation"] }>("/api/v1/machine/firmware", { method: "DELETE" }, 8000);
   }
 
   listDefaultProfiles() {
@@ -404,8 +444,8 @@ export class ReaPrimeApi {
     return this.request<MachineState>("/api/v1/machine/state", {}, timeoutMs);
   }
 
-  getAppInfo() {
-    return this.request<AppInfo>("/api/v1/info");
+  getAppInfo(timeoutMs?: number) {
+    return this.request<AppInfo>("/api/v1/info", {}, timeoutMs);
   }
 
   getSettings() {

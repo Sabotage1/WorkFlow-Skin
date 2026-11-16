@@ -86,6 +86,8 @@ import { ProfilesPage } from "./pages/ProfilesPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { ScreensaverPage } from "./pages/ScreensaverPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UpdatesPanel } from "./components/UpdatesPanel";
+import { useSoftwareUpdates } from "./state/useSoftwareUpdates";
 import { SteamPage } from "./pages/SteamPage";
 import { WorkflowsPage } from "./pages/WorkflowsPage";
 import {
@@ -768,6 +770,7 @@ export function App() {
   const gatewayModeUpdateRef = useRef(false);
   const api = useMemo(() => new ReaPrimeApi(), []);
   const data = useReaData(api);
+  const softwareUpdates = useSoftwareUpdates(api);
   const communityApi = useMemo(() => new CommunityApi(data.settings.communityApiBaseUrl), [data.settings.communityApiBaseUrl]);
   const liveTelemetry = useLiveTelemetry(undefined, { streamScale: page === "live" });
   const scaleLiveConnectedRef = useRef(liveTelemetry.scaleConnected);
@@ -2839,6 +2842,7 @@ export function App() {
   }, [api, data.settings.screensaverBrightness]);
 
   const sleepMachine = useCallback(async (confirmedSleepState?: MachineState) => {
+    if (softwareUpdates.firmwareBusy) return;
     if (sleepCommandRef.current) return;
     const generation = ++sleepGenerationRef.current;
     const isCurrent = () => startupMountedRef.current && sleepGenerationRef.current === generation;
@@ -2894,7 +2898,7 @@ export function App() {
         sleepDisplayRef.current = applyScreensaverDisplay(isCurrent);
       }
     }
-  }, [api, applyScreensaverDisplay]);
+  }, [api, applyScreensaverDisplay, softwareUpdates.firmwareBusy]);
 
   useEffect(() => {
     sleepMachineRef.current = sleepMachine;
@@ -3005,7 +3009,7 @@ export function App() {
   }, [api, data.loaded, page, sleepPending, liveMachineState?.state, sleepMachine, wakeScreen]);
 
   useEffect(() => {
-    if (!data.loaded || page === "screensaver" || !machineConnected) return;
+    if (!data.loaded || page === "screensaver" || !machineConnected || softwareUpdates.firmwareBusy) return;
     if (isBrewingMode(currentMachineMode) || isSleepingMode(currentMachineMode)) return;
 
     const autoSleepMinutes = data.settings.autoSleepMinutes;
@@ -3027,7 +3031,7 @@ export function App() {
     checkIdle();
     const timer = window.setInterval(checkIdle, autoSleepCheckIntervalMs(idleLimitMs));
     return () => window.clearInterval(timer);
-  }, [currentMachineMode, data.loaded, data.settings.autoSleepMinutes, machineConnected, page]);
+  }, [currentMachineMode, data.loaded, data.settings.autoSleepMinutes, machineConnected, page, softwareUpdates.firmwareBusy]);
 
   const forceScaleConnection = async () => {
     skinLog("scale_manual_scan_started");
@@ -3185,7 +3189,7 @@ export function App() {
           className="sleep-button"
           aria-label="Sleep machine"
           title={machineConnected ? "Sleep machine" : "Machine is not connected"}
-          disabled={!machineConnected || sleepPending || drinkWorkflowBusyRef.current}
+          disabled={!machineConnected || sleepPending || drinkWorkflowBusyRef.current || softwareUpdates.firmwareBusy}
           onClick={() => void sleepMachine()}
         >
           <Moon size={17} />
@@ -3243,6 +3247,10 @@ export function App() {
         )}
       </nav>
       <section className="page-surface">
+        {softwareUpdates.firmwareBusy && page !== "settings" && <div className="firmware-update-banner" role="status">
+          <span>Machine firmware update in progress. Keep the machine and tablet powered on.</span>
+          <button type="button" className="ghost-button" onClick={() => setPage("settings")}>View update</button>
+        </div>}
         {page !== "bags" && page !== "community" && <h1>{navById[page].label}</h1>}
         {data.error && (
           <p className="muted" role="alert" aria-live="assertive">
@@ -3457,6 +3465,8 @@ export function App() {
         )}
         {page === "settings" && (
           <SettingsPage
+            updatesPanel={<UpdatesPanel updates={softwareUpdates} />}
+            initialSection={softwareUpdates.firmwareBusy ? "updates" : "machine"}
             settings={data.settings}
             r2Sensor={r2Sensor}
             displayState={data.displayState}

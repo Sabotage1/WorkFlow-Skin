@@ -1444,7 +1444,7 @@ textarea {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -1470,6 +1470,31 @@ textarea {
   display: grid;
   gap: 12px;
 }
+
+.updates-panel { display: grid; gap: 16px; min-width: 0; }
+.updates-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.updates-heading h3 { margin: 0; }
+.updates-heading p { margin: 4px 0 0; color: var(--skin-muted); }
+.update-card { padding: 20px; border: 1px solid var(--skin-border); border-radius: 12px; background: var(--skin-surface); min-width: 0; }
+.update-kicker { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.12em; }
+.update-version { font-variant-numeric: tabular-nums; padding: 6px 10px; border: 1px solid var(--skin-border); border-radius: 8px; color: var(--skin-text); }
+.update-machine, .update-detail { color: var(--skin-muted); overflow-wrap: anywhere; }
+.update-summary { font-weight: 700; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.update-actions > * { min-height: 44px; }
+.update-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.update-notes, .update-manual { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--skin-border); }
+.update-notes summary, .update-manual summary { cursor: pointer; padding: 8px 0; font-weight: 700; }
+.update-notes p { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.update-manual p { color: var(--skin-muted); }
+.update-manual input { max-width: 100%; min-width: 0; }
+.update-progress { display: grid; gap: 10px; margin: 18px 0; }
+.update-progress span { color: var(--skin-muted); }
+.update-card progress { width: 100%; height: 10px; accent-color: var(--skin-accent); }
+.update-error { color: var(--skin-text); border-left: 3px solid #c84b45; padding-left: 12px; overflow-wrap: anywhere; }
+.update-confirmation { max-width: 540px; }
+.update-confirmation p { line-height: 1.6; overflow-wrap: anywhere; }
+.firmware-update-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; margin-bottom: 16px; background: var(--skin-panel); border: 1px solid var(--skin-accent); border-radius: 8px; }
 
 .settings-machine-row {
   gap: 12px;
