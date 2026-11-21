@@ -74,7 +74,7 @@ import {
 } from "./lib/machineMode";
 import { isActiveShotLifecycle, isFinishedShotLifecycle } from "./lib/shotLifecycle";
 import { grindSizeFromShot, shotStats } from "./lib/shotStats";
-import { resolveDisplayedProfileId, selectedProfileIdFromWorkflow, type CompletedWorkflowActivity } from "./lib/workflowRouting";
+import { resolveDisplayedProfileId, selectedProfileIdFromWorkflow } from "./lib/workflowRouting";
 import { workflowForSelectedProfile } from "./lib/profileWorkflow";
 import { BagsPage } from "./pages/BagsPage";
 import { BrewPage } from "./pages/BrewPage";
@@ -118,15 +118,13 @@ import { useReaData } from "./state/useReaData";
 import { useScaleShotFallback } from "./state/useScaleShotFallback";
 
 type Page = MainMenuItemId | "screensaver";
-type CompletedActivityCapture = {
-  activity: CompletedWorkflowActivity;
+type BrewCapture = {
   profileId?: string;
   startLatestShotId?: string | null;
   shotId?: string;
   machineBrewObserved?: boolean;
 };
 
-const POST_ACTIVITY_ROUTE_DELAY_MS = 1000;
 const POST_ACTIVITY_RECAPTURE_COOLDOWN_MS = 3000;
 const ACTIVE_MACHINE_STATE_POLL_MS = 500;
 const SCALE_RECONNECT_COOLDOWN_MS = 30_000;
@@ -706,7 +704,7 @@ export function App() {
   const [waterRefillAcknowledged, setWaterRefillAcknowledged] = useState(false);
   const [waterRefillVisible, setWaterRefillVisible] = useState(false);
   const [completedReviewShot, setCompletedReviewShot] = useState<ShotRecord | null>(null);
-  const [pendingCompletedReview, setPendingCompletedReview] = useState<{ capture: CompletedActivityCapture; shot: ShotRecord } | null>(null);
+  const [pendingCompletedReview, setPendingCompletedReview] = useState<{ capture: BrewCapture; shot: ShotRecord } | null>(null);
   const [nativeGatewayMode, setNativeGatewayMode] = useState<string | null | undefined>(undefined);
   const [nativePreferredScaleId, setNativePreferredScaleId] = useState<string | null | undefined>(undefined);
   const [communityRecommendations, setCommunityRecommendations] = useState<CommunityRecommendation[]>([]);
@@ -748,9 +746,8 @@ export function App() {
   const lastUseAtRef = useRef(lastUseAt);
   const lastUseStateAtRef = useRef(lastUseAt);
   const autoSleepPendingRef = useRef(false);
-  const completedActivityRef = useRef<CompletedActivityCapture | null>(null);
+  const brewCaptureRef = useRef<BrewCapture | null>(null);
   const lastHandledShotLifecycleIdRef = useRef<string | null>(null);
-  const completedActivityTimerRef = useRef<number | null>(null);
   const ignoreActiveActivityUntilAtRef = useRef(0);
   const readyLogRef = useRef(false);
   const lastLoggedPageRef = useRef<Page | null>(null);
@@ -875,7 +872,7 @@ export function App() {
   // machine has actually brewed and returned idle, review can start while
   // native persistence finishes. Preheating alone is not a completed brew.
   const machineBrewEnded = Boolean(
-    completedActivityRef.current?.machineBrewObserved && isIdleMode(currentMachineMode) &&
+    brewCaptureRef.current?.machineBrewObserved && isIdleMode(currentMachineMode) &&
     (!liveTelemetry.machineStreamConnected || isIdleMode(liveTelemetry.machineMode?.state) || liveTelemetry.shotLifecycle?.state === "stopping")
   );
   const sequencedBrewActive = Boolean(
@@ -913,7 +910,7 @@ export function App() {
     targetYield: positiveNumber(data.workflow.context?.targetYield)
   });
   const waterRefillAlertSuppressed = brewingCoffee || drinkWorkflowBusy;
-  const holdingCompletedBrewOnLivePage = page === "live" && !brewingCoffee && completedActivityRef.current?.activity === "brew";
+  const holdingCompletedBrewOnLivePage = page === "live" && !brewingCoffee && brewCaptureRef.current !== null;
   const workflowLiveVisible = Boolean(drinkWorkflowRun.workflow && drinkWorkflowBusy);
   const showLivePage = page === "live" && (brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible);
   const steamingMilk = isSteamingMode(currentMachineMode);
@@ -1716,7 +1713,7 @@ export function App() {
   useEffect(() => {
     if (!data.loaded || page !== "live" || brewingCoffee) return;
     if (drinkWorkflowBusyRef.current) return;
-    if (completedActivityRef.current?.activity === "brew" || completedActivityTimerRef.current !== null) return;
+    if (brewCaptureRef.current) return;
     if (latestShot) {
       const fallbackReviewShot = shotWithFallbackMeasurements(latestShot, liveTelemetry.measurements);
       setCompletedReviewShot(fallbackReviewShot);
@@ -1734,7 +1731,7 @@ export function App() {
       liveMode: liveTelemetry.machineStreamConnected ? liveTelemetry.machineMode?.state : undefined,
       // Keep the fresh idle read until the slower cached snapshot catches up.
       // Clearing it earlier can repeatedly resurrect the previous espresso.
-      hasCompletedActivity: Boolean(completedActivityRef.current) || sequencedBrewActive || sequencedBrewFinished ||
+      hasCompletedActivity: Boolean(brewCaptureRef.current) || sequencedBrewActive || sequencedBrewFinished ||
         Boolean(fastMachineState && !liveTelemetry.machineStreamConnected && data.machineState?.state?.state !== fastMachineState.state?.state)
     });
     if (!shouldPoll) {
@@ -1758,24 +1755,21 @@ export function App() {
     };
   }, [api, currentMachineMode, data.loaded, data.machineState?.state?.state, fastMachineState?.state?.state, liveTelemetry.machineMode?.state, liveTelemetry.machineStreamConnected, page, sequencedBrewActive, sequencedBrewFinished]);
 
-  const routeCompletedActivity = useCallback(
-    (completed: CompletedActivityCapture) => {
+  const reviewCompletedBrew = useCallback(
+    (completed: BrewCapture) => {
       if (completed.shotId) lastHandledShotLifecycleIdRef.current = completed.shotId;
       ignoreActiveActivityUntilAtRef.current = Date.now() + POST_ACTIVITY_RECAPTURE_COOLDOWN_MS;
-      if (completed.activity === "brew") {
-        const pendingShot: ShotRecord = {
-          id: `workflow-pending-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          workflow: data.workflow,
-          measurements: [...liveTelemetry.measurements]
-        };
-        setCompletedReviewShot(pendingShot);
-        setPendingCompletedReview({ capture: completed, shot: pendingShot });
-        setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
-        // The new shot may already have armed its R2 timer through the history
-        // refresh. Keep that request while the pending Review is resolved.
-        skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId: pendingShot.id });
-      }
+      const pendingShot: ShotRecord = {
+        id: `workflow-pending-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        workflow: data.workflow,
+        measurements: [...liveTelemetry.measurements]
+      };
+      setCompletedReviewShot(pendingShot);
+      setPendingCompletedReview({ capture: completed, shot: pendingShot });
+      setLastCompletedProfileId(completed.profileId ?? selectedProfileIdFromWorkflow(data.workflow, data.profiles));
+      // A history refresh may already have armed the R2 timer for this shot.
+      skinLog("brew_completed_pending_persistence", { shotId: completed.shotId ?? null, pendingShotId: pendingShot.id });
       setPage("review");
     },
     [data.profiles, data.workflow, liveTelemetry.measurements]
@@ -1819,72 +1813,47 @@ export function App() {
     if (!data.loaded) return;
 
     if (drinkWorkflowBusyRef.current) {
-      completedActivityRef.current = null;
-      if (completedActivityTimerRef.current !== null) {
-        window.clearTimeout(completedActivityTimerRef.current);
-        completedActivityTimerRef.current = null;
-      }
+      brewCaptureRef.current = null;
       return;
     }
 
     if (
       sequencedBrewFinished &&
       finishedShotLifecycle?.shotId &&
-      !completedActivityRef.current &&
+      !brewCaptureRef.current &&
       Date.now() >= ignoreActiveActivityUntilAtRef.current
     ) {
-      completedActivityRef.current = {
-        activity: "brew",
+      brewCaptureRef.current = {
         profileId: selectedProfileId,
         startLatestShotId: idleLatestShotIdRef.current,
         shotId: finishedShotLifecycle.shotId
       };
     }
 
-    const completedByShotLifecycle = completedActivityRef.current?.activity === "brew" && sequencedBrewFinished;
-    const modeActivity = workflowActivityForMode(currentMachineMode);
-    const activeActivity = sequencedBrewActive
-      ? "brew"
-      : (sequencedBrewFinished || handledShotLifecycleSettling) && modeActivity === "brew"
-        ? null
-        : modeActivity;
-    if (activeActivity) {
+    const machineBrewing = isBrewingMode(currentMachineMode);
+    const capturingBrew = sequencedBrewActive || (machineBrewing && !sequencedBrewFinished && !handledShotLifecycleSettling);
+    if (capturingBrew) {
       if (Date.now() < ignoreActiveActivityUntilAtRef.current && (!liveTelemetry.shotLifecycle?.shotId || liveTelemetry.shotLifecycle.shotId === lastHandledShotLifecycleIdRef.current)) return;
-      if (completedActivityRef.current?.activity !== activeActivity) {
-        completedActivityRef.current = {
-          activity: activeActivity,
+      if (!brewCaptureRef.current) {
+        brewCaptureRef.current = {
           profileId: selectedProfileId,
-          startLatestShotId: activeActivity === "brew" ? idleLatestShotIdRef.current ?? latestShot?.id ?? null : undefined,
-          shotId: activeActivity === "brew" ? liveTelemetry.shotLifecycle?.shotId ?? undefined : undefined,
-          machineBrewObserved: activeActivity === "brew" && isBrewingMode(currentMachineMode)
+          startLatestShotId: idleLatestShotIdRef.current ?? latestShot?.id ?? null,
+          shotId: liveTelemetry.shotLifecycle?.shotId ?? undefined,
+          machineBrewObserved: machineBrewing
         };
-      } else if (activeActivity === "brew" && !completedActivityRef.current.shotId && liveTelemetry.shotLifecycle?.shotId) {
-        completedActivityRef.current = { ...completedActivityRef.current, shotId: liveTelemetry.shotLifecycle.shotId };
+      } else if (!brewCaptureRef.current.shotId && liveTelemetry.shotLifecycle?.shotId) {
+        brewCaptureRef.current.shotId = liveTelemetry.shotLifecycle.shotId;
       }
-      if (activeActivity === "brew" && isBrewingMode(currentMachineMode)) completedActivityRef.current.machineBrewObserved = true;
-      if (completedActivityTimerRef.current !== null) {
-        window.clearTimeout(completedActivityTimerRef.current);
-        completedActivityTimerRef.current = null;
-      }
+      if (machineBrewing) brewCaptureRef.current.machineBrewObserved = true;
       return;
     }
 
-    if (!isIdleMode(currentMachineMode) && !completedByShotLifecycle) return;
-    if (!completedActivityRef.current) return;
-
-    const completed = completedActivityRef.current;
-    if (completed.activity === "brew") {
-      completedActivityRef.current = null;
-      void routeCompletedActivity(completed);
-      return;
-    }
-
-    if (completedActivityTimerRef.current !== null) return;
-    completedActivityTimerRef.current = window.setTimeout(() => {
-      completedActivityTimerRef.current = null;
-      completedActivityRef.current = null;
-      void routeCompletedActivity(completed);
-    }, POST_ACTIVITY_ROUTE_DELAY_MS);
+    // Steam can follow a brew before we see idle. Keep the brew capture until
+    // the shot lifecycle finishes or the machine returns to idle.
+    const completed = brewCaptureRef.current;
+    if (!completed || (!isIdleMode(currentMachineMode) && !sequencedBrewFinished)) return;
+    brewCaptureRef.current = null;
+    reviewCompletedBrew(completed);
   }, [
     currentMachineMode,
     data.loaded,
@@ -1892,19 +1861,11 @@ export function App() {
     liveTelemetry.shotLifecycle,
     finishedShotLifecycle,
     handledShotLifecycleSettling,
-    routeCompletedActivity,
+    reviewCompletedBrew,
     selectedProfileId,
     sequencedBrewActive,
     sequencedBrewFinished
   ]);
-
-  useEffect(() => {
-    return () => {
-      if (completedActivityTimerRef.current !== null) {
-        window.clearTimeout(completedActivityTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const updateFullscreenState = () => setFullscreen(Boolean(currentFullscreenElement()));
@@ -2120,11 +2081,7 @@ export function App() {
     const token = drinkWorkflowRunTokenRef.current + 1;
     drinkWorkflowRunTokenRef.current = token;
     drinkWorkflowBusyRef.current = true;
-    completedActivityRef.current = null;
-    if (completedActivityTimerRef.current !== null) {
-      window.clearTimeout(completedActivityTimerRef.current);
-      completedActivityTimerRef.current = null;
-    }
+    brewCaptureRef.current = null;
     setStatus(null);
     setPage("live");
     setDrinkWorkflowRun({ workflow, currentStepIndex: 0, phase: "preparing", message: `Preparing ${workflow.name}.` });
@@ -2174,6 +2131,8 @@ export function App() {
             setAutoReadR2ShotId(reviewTarget.id);
           }
           setPage("review");
+        } else {
+          setPage((current) => current === "live" ? page : current);
         }
         setStatus(
           detailSaveFailures > 0

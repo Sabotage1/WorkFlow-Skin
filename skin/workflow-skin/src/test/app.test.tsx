@@ -2661,6 +2661,80 @@ describe("App shell", () => {
     expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/machine/state/idle", expect.objectContaining({ method: "PUT" }));
   });
 
+  it.each(["steam", "steamRinse"])("stays on Steam after a standalone %s cycle with an old shot in history", async (mode) => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: mode, substate: "steaming" } },
+      shots: [{ id: "previous-shot", timestamp: "2026-06-12T09:30:00.000Z", workflow: {} }]
+    });
+    render(<App />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Steam" }));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+
+    expect(screen.getByRole("button", { name: "Steam" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
+  });
+
+  it("reviews the new espresso when the machine switches directly from brewing to steam", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch(initialSettings, {
+      machineState: { connected: true, state: { state: "espresso", substate: "pouring" } },
+      shots: [{ id: "previous-shot", timestamp: "2026-06-12T09:30:00.000Z", workflow: {} }]
+    });
+    render(<App />);
+    await act(async () => {});
+    expect(screen.getByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+
+    fetchState.setMachineState({ connected: true, state: { state: "steam" } });
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(screen.getByRole("heading", { name: "Live Brew" })).toBeInTheDocument();
+
+    fetchState.setShots([{
+      id: "new-espresso",
+      timestamp: "2026-06-12T10:00:00.000Z",
+      workflow: { profile: { title: "New espresso" } },
+      measurements: []
+    }]);
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+
+    expect(screen.getByRole("heading", { name: "Shot Review" })).toBeInTheDocument();
+    expect(screen.getByText("New espresso")).toBeInTheDocument();
+  });
+
+  it("returns to Work Flows after a steam-only recipe instead of reviewing an old shot", async () => {
+    vi.useFakeTimers();
+    const fetchState = mockReaFetch({
+      ...initialSettings,
+      drinkWorkflows: [{
+        id: "steam-only",
+        name: "Steam milk",
+        steps: [{ id: "steam-step", type: "steam", durationSeconds: 5, temperatureC: 150 }]
+      }]
+    }, {
+      machineState: { connected: true, state: { state: "idle" } },
+      shots: [{ id: "previous-shot", timestamp: "2026-06-12T09:30:00.000Z", workflow: {} }]
+    });
+    render(<App />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Work Flows" }));
+    const savedRecipe = screen.getByText("Steam milk", { selector: "strong" }).closest("article")!;
+    await act(async () => fireEvent.click(within(savedRecipe).getByRole("button", { name: "Start" })));
+    expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/machine/state/steam", expect.objectContaining({ method: "PUT" }));
+
+    fetchState.setMachineState({ connected: true, state: { state: "idle" } });
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+
+    expect(screen.getByText("Steam milk complete.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Work Flows" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("heading", { name: "Shot Review" })).not.toBeInTheDocument();
+  });
+
   it("persists steam timer edits from the steam page to the active profile workflow", async () => {
     const fetchState = mockReaFetch(
       {

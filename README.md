@@ -6,14 +6,16 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.4.8](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.8)
+- [WorkFlow Skin v0.4.9](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.9)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
-Version 0.4.8 adds **Settings → Updates** for DE1 firmware and the Decaid app.
-It shows installed versions, firmware availability and release notes, supports
-managed firmware installation or manual file upload, and displays progress and
-cancellation. Android builds that support app installation can update Decaid;
+Version 0.4.9 keeps the current screen after standalone steaming. Steam-only Work
+Flows return to the page they started from. Espresso shots still open Shot Review.
+
+The **Settings → Updates** screen added in 0.4.8 shows installed versions,
+firmware availability and release notes. It supports managed firmware installation,
+manual file uploads, progress and cancellation. Android builds that support app installation can update Decaid;
 other builds provide a release link. See the [Updates screen notes](docs/settings-updates.md).
 
 It retains the 0.4.7 fix for the refill kit's **Always on** setting being rejected and
