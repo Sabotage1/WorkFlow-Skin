@@ -9,8 +9,6 @@ import {
   Moon,
   NotebookPen,
   PackageOpen,
-  PanelLeftClose,
-  PanelLeftOpen,
   Settings,
   SlidersHorizontal,
   Users,
@@ -3178,19 +3176,16 @@ export function App() {
         </button>
       </TopStatusBar>
       <nav className="side-nav" aria-label="Workflow navigation">
-        <div className="menu-brand" aria-label="WorkFlow menu title">
-          <span className="menu-brand-full">WorkFlow</span>
-          <span className="menu-brand-short">WF</span>
-        </div>
         <button
           type="button"
-          className="nav-button menu-toggle-button"
-          aria-label={data.settings.menuCollapsed ? "Expand menu" : "Collapse menu"}
+          className="menu-brand"
+          aria-label="WorkFlow menu"
+          aria-expanded={!data.settings.menuCollapsed}
           title={data.settings.menuCollapsed ? "Expand menu" : "Collapse menu"}
           onClick={() => void toggleMenuCollapsed()}
         >
-          {data.settings.menuCollapsed ? <PanelLeftOpen className="nav-icon" size={navIconSize} /> : <PanelLeftClose className="nav-icon" size={navIconSize} />}
-          <span>{data.settings.menuCollapsed ? "Expand" : "Minimize"}</span>
+          <span className="menu-brand-full">WorkFlow</span>
+          <span className="menu-brand-short">WF</span>
         </button>
         {visibleMenuIds.map((itemId) => {
           const item = navById[itemId];

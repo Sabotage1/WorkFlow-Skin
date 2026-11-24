@@ -6,9 +6,11 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.5.0](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.5.0)
+- [WorkFlow Skin v0.5.1](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.5.1)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
+
+Tap **WorkFlow** at the top of the menu to collapse it. Tap **WF** to expand it again.
 
 Version 0.5.0 adds a visual profile editor. In **Profiles**, choose **Edit** on
 an existing profile or **New Profile** to start from an espresso template. The

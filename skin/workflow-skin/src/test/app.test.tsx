@@ -749,7 +749,7 @@ describe("App shell", () => {
     render(<App />);
 
     const topbar = await screen.findByRole("banner", { name: "Machine status bar" });
-    const menuTitle = screen.getByLabelText("WorkFlow menu title");
+    const menuTitle = screen.getByRole("button", { name: "WorkFlow menu" });
 
     expect(menuTitle).toHaveTextContent("WorkFlow");
     expect(topbar).toHaveTextContent("Heating");
@@ -944,7 +944,7 @@ describe("App shell", () => {
       render(<App />);
 
       expect(await screen.findByRole("heading", { name: "Brew" })).toBeInTheDocument();
-      expect(screen.getByLabelText("WorkFlow menu title")).toHaveTextContent("WorkFlow");
+      expect(screen.getByRole("button", { name: "WorkFlow menu" })).toHaveTextContent("WorkFlow");
     } finally {
       if (originalAtDescriptor) {
         Object.defineProperty(Array.prototype, "at", originalAtDescriptor);
@@ -1284,7 +1284,7 @@ describe("App shell", () => {
     const navigation = await screen.findByRole("navigation", { name: "Workflow navigation" });
     const labels = Array.from(navigation.querySelectorAll(".nav-button")).map((button) => button.getAttribute("aria-label"));
 
-    expect(labels).toEqual(["Collapse menu", "Brew", "Profiles", "Grinders", "Review", "Bags", "Work Flows", "Community", "Settings"]);
+    expect(labels).toEqual(["Brew", "Profiles", "Grinders", "Review", "Bags", "Work Flows", "Community", "Settings"]);
     expect(screen.queryByRole("button", { name: "History" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steam" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Live" })).not.toBeInTheDocument();
@@ -1316,7 +1316,7 @@ describe("App shell", () => {
 
     const reviewButton = await screen.findByRole("button", { name: "Review" });
     const reviewIcon = reviewButton.querySelector("svg");
-    const menuTitle = screen.getByLabelText("WorkFlow menu title");
+    const menuTitle = screen.getByRole("button", { name: "WorkFlow menu" });
 
     expect(menuTitle).toHaveTextContent("WF");
     expect(reviewButton).toHaveClass("review-nav-button");
@@ -1345,14 +1345,20 @@ describe("App shell", () => {
     expect(screen.getByRole("form", { name: "Add grinder" })).toBeInTheDocument();
   });
 
-  it("collapses the menu to icons and remembers the state", async () => {
+  it("toggles the menu from the WorkFlow logo and remembers both states", async () => {
     const fetchState = mockReaFetch(initialSettings);
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Collapse menu" }));
+    const logo = await screen.findByRole("button", { name: "WorkFlow menu" });
+    expect(logo).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(logo);
 
-    expect(await screen.findByRole("button", { name: "Expand menu" })).toBeInTheDocument();
+    expect(logo).toHaveAttribute("aria-expanded", "false");
     expect(fetchState.savedSettings.menuCollapsed).toBe(true);
+    await userEvent.keyboard("{Enter}");
+
+    expect(logo).toHaveAttribute("aria-expanded", "true");
+    expect(fetchState.savedSettings.menuCollapsed).toBe(false);
   });
 
   it("only lists shown profiles when choosing a preset profile", async () => {

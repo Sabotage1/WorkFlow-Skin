@@ -13,6 +13,7 @@ async function routeProfileEditorApi(page: Page) {
   const copyParents: Array<string | undefined> = [];
   let rejectNextCreate = false;
   let settings = {
+    menuCollapsed: false,
     presetSlots: [{ label: "Light" }, { label: "Sweet" }, { label: "Turbo" }, { label: "Classic" }],
     defaultReviewEnabled: true,
     reviewEnabledByProfile: {},
@@ -334,12 +335,38 @@ test("preset editor assigns a profile when a visible profile row is clicked", as
   expect(api.settings.presetSlots[0]).toEqual({ label: "Light", profileId: "profile-2" });
 });
 
+test("the WorkFlow logo toggles the menu across reload and on a narrow screen", async ({ page }) => {
+  const api = await routeProfileEditorApi(page);
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Workflow navigation" });
+  const logo = nav.getByRole("button", { name: "WorkFlow menu", exact: true });
+  await expect(logo.getByText("WorkFlow", { exact: true })).toBeVisible();
+  await logo.click();
+  await expect(logo).toHaveAttribute("aria-expanded", "false");
+  await expect(logo.getByText("WF", { exact: true })).toBeVisible();
+  await expect.poll(() => api.settings.menuCollapsed).toBe(true);
+  await page.reload();
+  await expect(logo).toHaveAttribute("aria-expanded", "false");
+  await logo.press("Enter");
+  await expect(logo).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(() => api.settings.menuCollapsed).toBe(false);
+
+  await page.setViewportSize({ width: 390, height: 640 });
+  await expect(logo.getByText("WF", { exact: true })).toBeVisible();
+  await logo.click();
+  await expect(logo).toHaveAttribute("aria-expanded", "false");
+  await nav.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true, level: 1 })).toBeVisible();
+  await logo.click();
+  await expect(logo).toHaveAttribute("aria-expanded", "true");
+});
+
 test("top machine status stays compact beside action buttons", async ({ page }) => {
   await routeProfileEditorApi(page);
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Brew" })).toBeVisible();
-  await expect(page.getByLabel("WorkFlow menu title")).toContainText("WorkFlow");
+  await expect(page.getByRole("button", { name: "WorkFlow menu", exact: true })).toContainText("WorkFlow");
 
   const metrics = await page.evaluate(() => {
     const bar = document.querySelector(".top-status-bar")?.getBoundingClientRect();
