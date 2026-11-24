@@ -2260,33 +2260,46 @@ export function App() {
     }
   };
 
-  const saveProfile = async (profileId: string, profile: Profile) => {
-    try {
-      const savedProfile = await api.updateProfile(profileId, { profile });
-      if (savedProfile.id !== profileId) {
-        await data.persistSettings(replaceProfileIdInSettings(data.settings, profileId, savedProfile.id));
+  const createProfile = async (profile: Profile, parentId?: string) => {
+    const saved = await api.createProfile({ profile, parentId });
+    if (!saved?.id || !saved.profile) throw new Error("Decaid did not confirm the profile was created.");
+    if (saved.id === parentId || saved.profile.title?.trim() !== profile.title) {
+      throw new Error("Decaid found a profile with the same brew settings. Change a step or target to save a separate profile.");
+    }
+    data.cacheProfile(saved);
+    if (!data.settings.shownProfileIds.includes(saved.id)) {
+      try {
+        await data.persistSettings({ ...data.settings, shownProfileIds: [...data.settings.shownProfileIds, saved.id] });
+      } catch {
+        setStatus({ type: "error", message: "Profile saved. Enable it in the preset picker from Profiles." });
+        return;
       }
-      await data.refresh();
-      setStatus({ type: "success", message: "Profile saved." });
+    }
+    setStatus({ type: "success", message: "Profile saved." });
+  };
+
+  const saveProfile = async (profileId: string, profile: Profile) => {
+    let saved: ProfileRecord;
+    try {
+      saved = await api.updateProfile(profileId, { profile });
     } catch (error) {
       if (error instanceof ReaPrimeApiError && error.status === 400 && error.message.includes("Cannot modify default profile content")) {
-        try {
-          const createdProfile = await api.createProfile({ profile, parentId: profileId });
-          await data.persistSettings({
-            ...data.settings,
-            shownProfileIds: Array.from(new Set([...data.settings.shownProfileIds, createdProfile.id]))
-          });
-          await data.refresh();
-          setStatus({ type: "success", message: "Profile saved." });
-          return;
-        } catch (createError) {
-          setStatus({ type: "error", message: `Could not save profile: ${errorMessage(createError)}` });
-          throw createError;
-        }
+        await createProfile(profile, profileId);
+        return;
       }
-      setStatus({ type: "error", message: `Could not save profile: ${errorMessage(error)}` });
       throw error;
     }
+    if (!saved?.id || !saved.profile) throw new Error("Decaid did not confirm the profile was saved.");
+    data.cacheProfile(saved, profileId);
+    if (saved.id !== profileId) {
+      try {
+        await data.persistSettings(replaceProfileIdInSettings(data.settings, profileId, saved.id));
+      } catch {
+        setStatus({ type: "error", message: "Profile saved. Decaid could not update its WorkFlow preset and startup assignments." });
+        return;
+      }
+    }
+    setStatus({ type: "success", message: "Profile saved." });
   };
 
   const assignPresetProfile = async (profile: ProfileRecord) => {
@@ -3387,6 +3400,8 @@ export function App() {
             onSetProfileShown={setProfileShown}
             onUpdateProfileWorkflow={updateProfileWorkflow}
             onSaveProfile={saveProfile}
+            onCreateProfile={createProfile}
+            onLoadProfileVersions={(profileId) => api.getProfileLineage(profileId)}
             grinderDose={{
               api,
               devices: data.devices ?? [],

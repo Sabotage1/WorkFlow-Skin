@@ -224,6 +224,10 @@ export class ReaPrimeApi {
     return this.request<ProfileRecord[]>("/api/v1/profiles/defaults");
   }
 
+  getProfileLineage(id: string) {
+    return this.request<ProfileRecord[]>(`/api/v1/profiles/${encodeURIComponent(id)}/lineage`, {}, 8000);
+  }
+
   updateProfile(id: string, payload: UpdateProfilePayload) {
     return this.request<ProfileRecord>(`/api/v1/profiles/${encodeURIComponent(id)}`, {
       method: "PUT",

@@ -868,8 +868,9 @@ describe("ProfilesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit Blooming" }));
     await userEvent.clear(screen.getByLabelText("Profile title"));
     await userEvent.type(screen.getByLabelText("Profile title"), "Blooming v2");
+    await userEvent.click(screen.getByRole("tab", { name: "Details" }));
     await userEvent.type(screen.getByLabelText("Author"), "Roy");
-    await userEvent.click(screen.getByRole("button", { name: "Save Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(onSaveProfile).toHaveBeenCalledWith(
       "p1",
@@ -929,7 +930,7 @@ describe("ProfilesPage", () => {
     fireEvent.change(screen.getByLabelText("Step 1 exit condition"), { target: { value: "under" } });
     fireEvent.change(screen.getByLabelText("Step 1 exit value"), { target: { value: "1.4" } });
     await userEvent.click(screen.getByRole("button", { name: "Add step" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(onSaveProfile).toHaveBeenCalledWith(
       "p1",

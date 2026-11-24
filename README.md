@@ -6,9 +6,15 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.4.9](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.4.9)
+- [WorkFlow Skin v0.5.0](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.5.0)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
+
+Version 0.5.0 adds a visual profile editor. In **Profiles**, choose **Edit** on
+an existing profile or **New Profile** to start from an espresso template. The
+preview updates as you change steps, pressure, flow, temperature, exits and limits.
+Use **Details** to set profile targets, import or export JSON, and load versions
+available in Decaid. **Save as copy** keeps the original profile in the library.
 
 Version 0.4.9 keeps the current screen after standalone steaming. Steam-only Work
 Flows return to the page they started from. Espresso shots still open Shot Review.
@@ -402,4 +408,4 @@ The skin itself no longer contains GitHub update controls. Updates should come f
 
 ## Current Status
 
-WorkFlow Skin v0.4.8 adds a firmware and Decaid Updates screen in Settings. It keeps the refill kit Always on fix, per-profile saved Brew recipes and opt-in Atom65 grinder dose controls. It keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.
+WorkFlow Skin v0.5.0 adds the visual editor for new and existing profiles. It includes the firmware and Decaid Updates screen in Settings and keeps the refill kit Always on fix, per-profile saved Brew recipes and opt-in Atom65 grinder dose controls. It keeps scale and R2 diagnostics in logs and requires a current connection for automatic readings. It retains dedicated-driver R2 readings on Decaid 0.9.0 and 0.9.1. It retains native scale recovery and compatibility checks for Decaid 0.8.8 and 0.9.0-beta.2 while retaining Apple Home sleep and Home Assistant wake synchronization. It retains startup preset restoration, confirmed sleep, immediate post-shot Review, and scale-free shot completion, with API contract checks against Decaid 0.8.5 and 0.8.6. It includes community uploads, downloads, downloader profile ranks, emoji star badges in the top-right of community recommendation cards, half-star display for rounded-up community averages, sorting by rank count and uploader score, uploaded-profile edits and deletes, Review-page sharing, History-page sharing, shot ranks inside shorter History cards, recommendation star ratings and rating filters, burr type filtering, grinder search, default-grinder-first Review dropdowns, up to eight brew-page presets, a narrower expanded menu, R2 review support, upload status messages above the recommendation form fields, Android WebView scroll tuning, a low-water refill warning screen, and the Worker path allowlist that keeps community data separate from skin release files.

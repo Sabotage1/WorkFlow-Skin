@@ -48,6 +48,24 @@ describe("useReaData", () => {
     await act(async () => { releaseProfiles(); await refresh; });
     expect(result.current.settings.skinTitle).toBe("New saved settings");
   });
+
+  it("keeps a confirmed edited profile when an older library refresh finishes", async () => {
+    const api = createApi();
+    const original = { id: "original", profile: { title: "Before edit" } };
+    const edited = { id: "edited", profile: { title: "After edit" } };
+    api.listProfiles.mockResolvedValue([original]);
+    const { result } = renderHook(() => useReaData(api as never));
+    await flushPromises();
+    let releaseProfiles!: () => void;
+    api.listProfiles.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseProfiles = () => resolve([original]);
+    }));
+    let refresh!: Promise<void>;
+    act(() => { refresh = result.current.refresh(); });
+    act(() => result.current.cacheProfile(edited, original.id));
+    await act(async () => { releaseProfiles(); await refresh; });
+    expect(result.current.profiles).toEqual([edited]);
+  });
   afterEach(() => {
     vi.useRealTimers();
   });

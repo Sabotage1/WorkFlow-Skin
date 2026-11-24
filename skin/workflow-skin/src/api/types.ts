@@ -2,11 +2,15 @@ export type JsonMap = Record<string, unknown>;
 export type BurrType = "flat" | "conical";
 
 export interface Profile {
+  version?: string | null;
   title?: string;
   author?: string;
   notes?: string;
   beverage_type?: string;
   target_weight?: number | null;
+  target_volume?: number | null;
+  target_volume_count_start?: number;
+  tank_temperature?: number;
   steps?: Array<JsonMap>;
 }
 
@@ -15,6 +19,8 @@ export interface ProfileRecord {
   profile: Profile;
   metadata?: JsonMap;
   visibility?: "visible" | "hidden";
+  isDefault?: boolean;
+  updatedAt?: string;
 }
 
 export interface WorkflowContext {

@@ -1384,7 +1384,7 @@ describe("App shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit Blooming" }));
     await userEvent.clear(screen.getByLabelText("Profile title"));
     await userEvent.type(screen.getByLabelText("Profile title"), "Blooming Copy");
-    await userEvent.click(screen.getByRole("button", { name: "Save Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("Profile saved.");
     expect(fetchState.fetchMock).toHaveBeenCalledWith(
@@ -1416,7 +1416,7 @@ describe("App shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit Blooming" }));
     await userEvent.clear(screen.getByLabelText("Profile title"));
     await userEvent.type(screen.getByLabelText("Profile title"), "Blooming Edited");
-    await userEvent.click(screen.getByRole("button", { name: "Save Blooming" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("Profile saved.");
     expect(fetchState.savedSettings.startupProfileId).toBe("p1-copy");

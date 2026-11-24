@@ -69,6 +69,7 @@ async function loadShots(api: ReaPrimeApi): Promise<{ items: ShotRecord[]; error
 
 export function useReaData(api: ReaPrimeApi) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
+  const profileRevisionRef = useRef(0);
   const [workflow, setWorkflow] = useState<Workflow>({});
   const workflowRevisionRef = useRef(0);
   const [beans, setBeans] = useState<Bean[]>([]);
@@ -149,6 +150,7 @@ export function useReaData(api: ReaPrimeApi) {
 
   const refreshInitial = useCallback(async () => {
     const revision = workflowRevisionRef.current;
+    const profileRevision = profileRevisionRef.current;
     const settingsRevision = settingsRevisionRef.current;
     try {
       const [profileList, workflowData, savedSettings, state] = await Promise.all([
@@ -157,7 +159,7 @@ export function useReaData(api: ReaPrimeApi) {
         loadSkinSettings(api),
         api.getMachineState().catch(() => null as MachineState | null)
       ]);
-      setProfiles(profileList);
+      if (profileRevisionRef.current === profileRevision) setProfiles(profileList);
       if (workflowRevisionRef.current === revision) setWorkflow(workflowData);
       setMachineState(state);
       if (settingsRevisionRef.current === settingsRevision) setSettings(savedSettings);
@@ -178,6 +180,7 @@ export function useReaData(api: ReaPrimeApi) {
 
   const refreshAll = useCallback(async () => {
     const revision = workflowRevisionRef.current;
+    const profileRevision = profileRevisionRef.current;
     const settingsRevision = settingsRevisionRef.current;
     try {
       const [
@@ -226,7 +229,7 @@ export function useReaData(api: ReaPrimeApi) {
             api.callPluginEndpoint<JsonMap>("visualizer.reaplugin", "forwardSyncStatus").catch(() => null)
           ])
         : [null, null, null, null, null];
-      setProfiles(profileList);
+      if (profileRevisionRef.current === profileRevision) setProfiles(profileList);
       if (workflowRevisionRef.current === revision) setWorkflow(workflowData);
       setBeans(beanList);
       setBatches(batchLists.flat());
@@ -320,6 +323,18 @@ export function useReaData(api: ReaPrimeApi) {
     [api]
   );
 
+  const cacheProfile = useCallback((saved: ProfileRecord, previousId?: string) => {
+    profileRevisionRef.current += 1;
+    setProfiles((current) => {
+      const index = current.findIndex((profile) => profile.id === (previousId ?? saved.id));
+      if (index < 0) return [...current.filter((profile) => profile.id !== saved.id), saved];
+      return current.flatMap((profile, position) => {
+        if (position === index) return [saved];
+        return profile.id === saved.id ? [] : [profile];
+      });
+    });
+  }, []);
+
   const cacheShot = useCallback((shot: ShotRecord) => {
     setShots((current) => sortShotsNewestFirst([shot, ...current.filter((item) => item.id !== shot.id)]));
   }, []);
@@ -357,6 +372,7 @@ export function useReaData(api: ReaPrimeApi) {
     refreshConnectivity,
     refreshWorkflow,
     setWorkflow: setWorkflowData,
+    cacheProfile,
     cacheShot,
     persistSettings
   };

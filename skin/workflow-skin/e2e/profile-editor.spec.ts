@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import type { Profile, ProfileRecord } from "../src/api/types";
 
 const profiles = Array.from({ length: 28 }, (_, index) => ({
   id: `profile-${index + 1}`,
@@ -6,6 +8,10 @@ const profiles = Array.from({ length: 28 }, (_, index) => ({
 }));
 
 async function routeProfileEditorApi(page: Page) {
+  let library: ProfileRecord[] = [...profiles];
+  const created: Profile[] = [];
+  const copyParents: Array<string | undefined> = [];
+  let rejectNextCreate = false;
   let settings = {
     presetSlots: [{ label: "Light" }, { label: "Sweet" }, { label: "Turbo" }, { label: "Classic" }],
     defaultReviewEnabled: true,
@@ -47,7 +53,25 @@ async function routeProfileEditorApi(page: Page) {
     const method = request.method();
     let body: unknown = null;
 
-    if (method === "GET" && url.pathname === "/api/v1/profiles") body = profiles;
+    if (method === "GET" && url.pathname === "/api/v1/profiles") body = library;
+    else if (method === "POST" && url.pathname === "/api/v1/profiles") {
+      const { profile, parentId } = request.postDataJSON() as { profile: Profile; parentId?: string };
+      if (rejectNextCreate) {
+        rejectNextCreate = false;
+        await route.fulfill({ status: 503, json: { error: "Library unavailable" } });
+        return;
+      }
+      created.push(profile);
+      copyParents.push(parentId);
+      body = { id: `new-${created.length}`, profile };
+      library = [...library, body as ProfileRecord];
+    } else if (method === "PUT" && url.pathname.startsWith("/api/v1/profiles/")) {
+      const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+      const { profile } = request.postDataJSON() as { profile: Profile };
+      const saved = { id, profile };
+      library = library.map((record) => record.id === id ? saved : record);
+      body = saved;
+    }
     else if (method === "GET" && url.pathname === "/api/v1/workflow") body = { context: { targetDoseWeight: 18, targetYield: 36 } };
     else if (method === "GET" && url.pathname === "/api/v1/beans") body = [];
     else if (method === "GET" && url.pathname === "/api/v1/grinders") body = [];
@@ -80,11 +104,164 @@ async function routeProfileEditorApi(page: Page) {
   });
 
   return {
+    created,
+    copyParents,
+    rejectNextCreate: () => { rejectNextCreate = true; },
     get settings() {
       return settings;
     }
   };
 }
+
+test("creates and reopens a profile in the visual editor with the saved step order and targets", async ({ page }, testInfo) => {
+  const api = await routeProfileEditorApi(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "New Profile", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New profile" });
+  await expect(editor.getByRole("img", { name: /Profile preview/ })).toBeVisible();
+  await expect(editor.getByLabel("Profile title")).toBeFocused();
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor.getByRole("alert")).toHaveText("Enter a profile title.");
+  expect(api.created).toHaveLength(0);
+  await editor.getByLabel("Profile title").fill("Quiet morning");
+  await editor.getByRole("tab", { name: "Steps" }).click();
+  const chart = editor.getByRole("img", { name: /Profile preview/ });
+  const bounds = await chart.boundingBox();
+  expect(bounds).toBeTruthy();
+  await chart.click({ position: { x: bounds!.width * 0.8, y: 55 } });
+  await expect(editor.getByRole("button", { name: /Extraction.*8 bar/ })).toHaveAttribute("aria-pressed", "true");
+  await editor.getByLabel("Step 2 pressure goal").fill("7.5");
+  await editor.getByRole("button", { name: "Duplicate", exact: true }).click();
+  await editor.getByLabel("Step 3 name", { exact: true }).fill("Finish");
+  await editor.getByLabel("Step 3 seconds").fill("5");
+  await editor.getByLabel("Step 3 pressure goal").fill("5.5");
+  await editor.getByRole("button", { name: "Move earlier", exact: true }).click();
+  await expect(editor.getByLabel("Step 2 name", { exact: true })).toHaveValue("Finish");
+  await editor.getByRole("tab", { name: "Summary" }).click();
+  await expect(editor.getByRole("heading", { name: "Recipe summary" })).toBeVisible();
+  await expect(editor.getByText("3 steps · 40 s max")).toBeVisible();
+  await editor.getByRole("tab", { name: "Details" }).click();
+  await editor.getByLabel("Target weight", { exact: true }).fill("38");
+  await editor.getByLabel("Count water volume from").selectOption("2");
+  await editor.getByRole("tab", { name: "Steps" }).click();
+  await editor.locator(".recipe-body").evaluate((element) => { element.scrollTop = 0; });
+  await page.screenshot({ path: testInfo.outputPath("visual-profile-editor.png") });
+
+  api.rejectNextCreate();
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor.getByRole("alert")).toContainText("Library unavailable");
+  await expect(editor.getByLabel("Profile title")).toHaveValue("Quiet morning");
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor).toHaveCount(0);
+  expect(api.created).toHaveLength(1);
+  expect(api.created[0]).toMatchObject({ title: "Quiet morning", target_weight: 38, target_volume_count_start: 2, tank_temperature: 0 });
+  expect(api.created[0].steps?.map(({ name, pressure }) => [name, pressure])).toEqual([
+    ["Preinfusion", undefined], ["Finish", 5.5], ["Extraction", 7.5]
+  ]);
+  await expect(page.getByRole("button", { name: "Edit Quiet morning" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit Quiet morning", exact: true }).click();
+  const edit = page.getByRole("dialog", { name: "Edit profile" });
+  await expect(edit.getByLabel("Profile title")).toHaveValue("Quiet morning");
+  await edit.getByRole("button", { name: /Finish.*5.5 bar/ }).click();
+  await edit.getByLabel("Step 2 pressure goal").fill("5");
+  await edit.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(edit).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit Quiet morning", exact: true }).click();
+  await edit.getByRole("button", { name: /Finish.*5 bar/ }).click();
+  await expect(edit.getByLabel("Step 2 pressure goal")).toHaveValue("5");
+});
+
+test("loads JSON into the editor and retains its extra fields until the user saves", async ({ page }) => {
+  const api = await routeProfileEditorApi(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "New Profile", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New profile" });
+  await editor.getByRole("tab", { name: "Details" }).click();
+  const json = {
+    title: "Imported flow",
+    tank_temperature: 0,
+    target_volume_count_start: 0,
+    customProfileField: "keep",
+    steps: [{ name: "Extract", pump: "flow", flow: 3, temperature: 92, sensor: "water", transition: "smooth",
+      seconds: 26, weight: 35, volume: 70, customStepField: "keep" }]
+  };
+  await editor.getByLabel("Import profile JSON").setInputFiles({ name: "import.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(json)) });
+  await expect(editor.getByLabel("Profile title")).toHaveValue("Imported flow");
+  await expect(editor.getByLabel("Step 1 flow goal")).toHaveValue("3");
+  expect(api.created).toHaveLength(0);
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor).toHaveCount(0);
+  expect(api.created[0]).toMatchObject(json);
+});
+
+test("opens a historical version as a draft, exports it, and saves it as a linked copy", async ({ page }) => {
+  const api = await routeProfileEditorApi(page);
+  const older: ProfileRecord = {
+    id: "previous-1",
+    profile: {
+      title: "Earlier recipe",
+      steps: [{ name: "Extract", pump: "pressure", pressure: 6, temperature: 93, sensor: "coffee", seconds: 25, transition: "fast" }]
+    }
+  };
+  await page.route("**/api/v1/profiles/profile-1/lineage", (route) => route.fulfill({
+    json: [profiles[0], older]
+  }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Long Profile 1", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit profile" });
+  await editor.getByRole("tab", { name: "Details" }).click();
+  await editor.getByRole("button", { name: "Load version history" }).click();
+  await editor.getByRole("button", { name: "Open in editor", exact: true }).click();
+  await expect(editor.getByLabel("Profile title")).toHaveValue("Earlier recipe");
+  await editor.getByLabel("Profile title").fill("Earlier recipe variation");
+  await editor.getByLabel("Step 1 pressure goal").fill("6.5");
+  await editor.getByRole("tab", { name: "Details" }).click();
+  const pendingDownload = page.waitForEvent("download");
+  await editor.getByRole("button", { name: "Export JSON" }).click();
+  const download = await pendingDownload;
+  expect(download.suggestedFilename()).toBe("Earlier recipe variation.json");
+  const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+  expect(exported).toMatchObject({ title: "Earlier recipe variation", steps: [{ pressure: 6.5 }] });
+  expect(api.created).toHaveLength(0);
+  await editor.getByRole("button", { name: "Save as copy", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(api.created).toEqual([exported]);
+  expect(api.copyParents).toEqual(["profile-1"]);
+  await expect(page.getByRole("button", { name: "Edit Long Profile 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit Earlier recipe variation", exact: true })).toBeVisible();
+});
+
+test("keeps editing usable on a narrow touch layout and protects an unsaved draft", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  const api = await routeProfileEditorApi(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "New Profile", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New profile" });
+  await editor.getByLabel("Profile title").fill("Small screen");
+  const body = editor.locator(".recipe-body");
+  const metrics = await body.evaluate((element) => ({
+    overflow: element.scrollWidth - element.clientWidth,
+    canScroll: element.scrollHeight > element.clientHeight
+  }));
+  expect(metrics.overflow).toBeLessThanOrEqual(1);
+  expect(metrics.canScroll).toBe(true);
+  await editor.getByRole("button", { name: /Extraction.*8 bar/ }).click();
+  await editor.getByLabel("Step 2 pressure goal").fill("17");
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor.getByRole("alert")).toContainText("exceeds a machine limit");
+  expect(api.created).toHaveLength(0);
+  page.once("dialog", (prompt) => prompt.dismiss());
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor.getByLabel("Profile title")).toHaveValue("Small screen");
+  page.once("dialog", (prompt) => prompt.accept());
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "New Profile", exact: true })).toBeFocused();
+});
 
 test("preset editor keeps long profile lists scrollable inside the dialog", async ({ page }) => {
   await routeProfileEditorApi(page);
