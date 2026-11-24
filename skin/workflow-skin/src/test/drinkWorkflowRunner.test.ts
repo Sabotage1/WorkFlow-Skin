@@ -47,10 +47,14 @@ describe("drink Work Flow runner", () => {
       ]
     };
     const states: DrinkWorkflowRunState[] = [];
+    const tareTimes: number[] = [];
+    api.tareScale.mockImplementation(async () => { tareTimes.push(Date.now()); });
 
     await settle(runDrinkWorkflow({ api, workflow, profiles, profileWorkflows: { p1: { milkBased: false, steamTimers: {}, brewRecipe: { dose: 20, yield: 42 } } }, isCanceled: () => false, onState: (state) => states.push(state) }));
 
-    expect(api.tareScale).toHaveBeenCalledTimes(2);
+    expect(api.tareScale).toHaveBeenCalledTimes(4);
+    expect(tareTimes[1] - tareTimes[0]).toBe(500);
+    expect(tareTimes[3] - tareTimes[2]).toBe(500);
     expect(api.requestMachineState.mock.calls.map(([state]) => state)).toEqual(["espresso", "hotWater"]);
     expect(api.updateWorkflow).toHaveBeenCalledWith(expect.objectContaining({ profile: profiles[0].profile, context: expect.objectContaining({ targetDoseWeight: 20, targetYield: 42 }) }));
     expect(api.updateWorkflow).toHaveBeenCalledWith({
@@ -75,7 +79,26 @@ describe("drink Work Flow runner", () => {
     await settle(runDrinkWorkflow({ api, workflow, profiles, isCanceled: () => false, onState: vi.fn() }));
 
     expect(api.requestMachineState.mock.calls.map(([state]) => state)).toEqual(["hotWater", "espresso"]);
-    expect(api.tareScale).toHaveBeenCalledTimes(2);
+    expect(api.tareScale).toHaveBeenCalledTimes(4);
+  });
+
+  it("skips the follow-up tare and machine start when canceled during the delay", async () => {
+    const api = runnerApi(["idle"]);
+    let canceled = false;
+    const workflow: DrinkWorkflow = {
+      id: "canceled-before-start",
+      name: "Canceled",
+      steps: [{ id: "water", type: "hotWater", volumeMl: 100, temperatureC: 80 }]
+    };
+    const run = runDrinkWorkflow({ api, workflow, profiles, isCanceled: () => canceled, onState: vi.fn() });
+    const finished = expect(run).rejects.toThrow("Work Flow canceled.");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(api.tareScale).toHaveBeenCalledTimes(1);
+    canceled = true;
+    await vi.runAllTimersAsync();
+    await finished;
+    expect(api.tareScale).toHaveBeenCalledTimes(1);
+    expect(api.requestMachineState).not.toHaveBeenCalled();
   });
 
   it("applies steam settings and runs steam without requiring a scale tare", async () => {

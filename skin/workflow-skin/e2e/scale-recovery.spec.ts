@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function nativeGateway(page: Page, version: string, preferred = true) {
-  const state = { awake: false, connected: false, scanning: false, scans: [] as URLSearchParams[], explicitConnects: 0, tares: 0, wakeRequests: 0, mode: "idle", staleInventory: false, blockTare: false, scanFailure: 0, tareFailure: 0, logs: [] as string[] };
+  const state = { awake: false, connected: false, scanning: false, scans: [] as URLSearchParams[], explicitConnects: 0, tares: 0, tareTimes: [] as number[], wakeRequests: 0, mode: "idle", staleInventory: false, blockTare: false, scanFailure: 0, tareFailure: 0, logs: [] as string[] };
   page.on("console", (message) => state.logs.push(message.text()));
   const profile = { title: "Classic", steps: [{ name: "Pour", seconds: 25, pressure: 6, temperature: 93 }] };
   const workflow = { id: "morning", profile, context: { targetDoseWeight: 18, targetYield: 36 } };
@@ -54,6 +54,7 @@ async function nativeGateway(page: Page, version: string, preferred = true) {
       return;
     } else if (path === "/api/v1/scale/tare") {
       state.tares++;
+      state.tareTimes.push(Date.now());
       if (state.tareFailure) {
         await route.fulfill({ status: state.tareFailure, json: { error: "Scale tare failed: plugin disconnected" } });
         return;
@@ -73,6 +74,20 @@ async function nativeGateway(page: Page, version: string, preferred = true) {
   });
   return state;
 }
+
+test("Scale sends a second tare half a second after the first", async ({ page }) => {
+  const gateway = await nativeGateway(page, "0.9.1");
+  gateway.awake = true;
+  gateway.connected = true;
+  await page.goto("/");
+  const scale = page.getByRole("button", { name: "Scale", exact: true });
+  await expect(scale).toHaveAttribute("title", "Scale: Connected");
+  await scale.click();
+  await expect.poll(() => gateway.tares).toBe(1);
+  await expect.poll(() => gateway.tares).toBe(2);
+  expect(gateway.tareTimes[1] - gateway.tareTimes[0]).toBeGreaterThanOrEqual(450);
+  expect(gateway.tareTimes[1] - gateway.tareTimes[0]).toBeLessThan(1000);
+});
 
 for (const version of ["0.8.8", "0.9.0-beta.2"]) {
   test(`Scale button connects through the host on ${version} and fresh primary telemetry wins over stale inventory`, async ({ page }, testInfo) => {

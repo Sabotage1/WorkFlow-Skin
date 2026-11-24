@@ -11,6 +11,7 @@ Latest release:
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
 
 Tap **WorkFlow** at the top of the menu to collapse it. Tap **WF** to expand it again.
+The **Scale** button and the scale preparation for Work Flows send a second tare 0.5 seconds after the first.
 
 Version 0.5.0 adds a visual profile editor. In **Profiles**, choose **Edit** on
 an existing profile or **New Profile** to start from an espresso template. The

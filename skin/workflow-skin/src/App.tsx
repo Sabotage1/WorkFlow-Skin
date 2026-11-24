@@ -46,7 +46,7 @@ import type { CommunityRecommendation, DownloadedCommunityProfile, UploadedCommu
 import type { Bag } from "./lib/bags";
 import { buildConnectivityStatuses } from "./lib/connectivity";
 import type { ConnectivityStatus } from "./lib/connectivity";
-import { isPrimaryScaleCandidate, supportsEarlyScaleReconnect, usesNativeScaleRecovery } from "./lib/scaleConnection";
+import { isPrimaryScaleCandidate, SCALE_SECOND_TARE_DELAY_MS, supportsEarlyScaleReconnect, usesNativeScaleRecovery } from "./lib/scaleConnection";
 import {
   DrinkWorkflowCanceledError,
   runDrinkWorkflow as executeDrinkWorkflow
@@ -62,6 +62,7 @@ import {
 } from "./lib/drinkWorkflows";
 import { machineModeLabel, machineTargetTemperature, machineTemperature } from "./lib/machineState";
 import {
+  compactMachineMode,
   isBrewingMode,
   isIdleMode,
   isSleepingMode,
@@ -912,6 +913,10 @@ export function App() {
   const workflowLiveVisible = Boolean(drinkWorkflowRun.workflow && drinkWorkflowBusy);
   const showLivePage = page === "live" && (brewingCoffee || holdingCompletedBrewOnLivePage || workflowLiveVisible);
   const steamingMilk = isSteamingMode(currentMachineMode);
+  const manualScaleRetareAllowedRef = useRef(false);
+  manualScaleRetareAllowedRef.current =
+    !brewingCoffee && !steamingMilk && compactMachineMode(currentMachineMode) !== "hotwater" &&
+    !machineSleeping && page !== "screensaver" && !softwareUpdates.firmwareBusy;
   const statuses = useMemo(
     () =>
       buildConnectivityStatuses({
@@ -3035,11 +3040,22 @@ export function App() {
     }
   };
 
+  const tareScaleWithFollowUp = async () => {
+    const nextTareAt = Date.now() + SCALE_SECOND_TARE_DELAY_MS;
+    await api.tareScale();
+    await new Promise<void>((resolve) => window.setTimeout(resolve, Math.max(0, nextTareAt - Date.now())));
+    if (!startupMountedRef.current || !manualScaleRetareAllowedRef.current ||
+        drinkWorkflowBusyRef.current || machineSleepRequestedRef.current) return;
+    await api.tareScale().catch((error) => {
+      skinLog("scale_second_tare_failed", { error: errorMessage(error) });
+    });
+  };
+
   const tareScaleFromIndicator = async () => {
     setExpandedStatusId(null);
     skinLog("scale_tare_started");
     try {
-      await api.tareScale();
+      await tareScaleWithFollowUp();
       await data.refreshConnectivity();
       skinLog("scale_tare_succeeded");
     } catch (error) {
@@ -3056,7 +3072,7 @@ export function App() {
         });
         if (result.canceled) return;
         if (result.connected) {
-          await api.tareScale();
+          await tareScaleWithFollowUp();
           await data.refreshConnectivity();
           skinLog("scale_tare_succeeded", { recovered: true });
           return;

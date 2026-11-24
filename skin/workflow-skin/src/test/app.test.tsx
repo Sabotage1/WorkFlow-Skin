@@ -4204,7 +4204,7 @@ describe("App shell", () => {
     expect(fetchState.scanCount).toBeGreaterThanOrEqual(scansBeforeIndicatorPress + 1);
   });
 
-  it("tares the scale when the connected Scale status is pressed", async () => {
+  it("tares the scale twice when the connected Scale status is pressed", async () => {
     const fetchState = mockReaFetch(initialSettings, {
       devices: [{ id: "scale-1", name: "Acaia", type: "scale", state: "connected" }]
     });
@@ -4212,10 +4212,9 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(fetchState.scaleTareCount).toBe(1));
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(2));
     expect(screen.queryByText("Scale tared.")).not.toBeInTheDocument();
     expect(fetchState.fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/scale/tare", expect.objectContaining({ method: "PUT" }));
-    expect(fetchState.scaleTareCount).toBe(1);
   });
 
   it("tares the scale from live scale status even when the native device list is stale", async () => {
@@ -4230,9 +4229,8 @@ describe("App shell", () => {
     const scansBeforeTap = fetchState.scanCount;
     await userEvent.click(screen.getByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(fetchState.scaleTareCount).toBe(1));
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(2));
     expect(screen.queryByText("Scale tared.")).not.toBeInTheDocument();
-    expect(fetchState.scaleTareCount).toBe(1);
     expect(fetchState.scanCount).toBe(scansBeforeTap);
   });
 
@@ -4249,9 +4247,8 @@ describe("App shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Scale" }));
 
-    await waitFor(() => expect(fetchState.scaleTareCount).toBe(2), { timeout: 2500 });
+    await waitFor(() => expect(fetchState.scaleTareCount).toBe(3), { timeout: 2500 });
     expect(screen.queryByText("Scale connected and tared.")).not.toBeInTheDocument();
-    expect(fetchState.scaleTareCount).toBe(2);
   });
 
   it("connects a scale returned only by the scan response", async () => {

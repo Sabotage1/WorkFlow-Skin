@@ -1,5 +1,7 @@
 import type { DeviceInfo } from "../api/types";
 
+export const SCALE_SECOND_TARE_DELAY_MS = 500;
+
 export function usesNativeScaleRecovery(version: string | undefined): boolean {
   const match = version?.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match) return false;

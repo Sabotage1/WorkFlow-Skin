@@ -1,6 +1,7 @@
 import type { MachineState, ProfileRecord, ShotRecord, WeightSnapshot, Workflow } from "../api/types";
 import type { ProfileWorkflowSettings } from "../state/skinSettings";
 import { workflowForSelectedProfile } from "./profileWorkflow";
+import { SCALE_SECOND_TARE_DELAY_MS } from "./scaleConnection";
 import {
   hotWaterSafetyDurationSeconds,
   type DrinkWorkflow,
@@ -260,7 +261,12 @@ export async function runDrinkWorkflow(options: RunDrinkWorkflowOptions): Promis
       try {
         tareRequestedAt = Date.now();
         await api.tareScale();
-      } catch {
+        await wait(tareRequestedAt + SCALE_SECOND_TARE_DELAY_MS - Date.now(), isCanceled);
+        assertNotCanceled(isCanceled);
+        tareRequestedAt = Date.now();
+        await api.tareScale();
+      } catch (error) {
+        if (error instanceof DrinkWorkflowCanceledError) throw error;
         throw new Error(`Could not tare the scale before ${stepName(step)}. Connect the scale and start again.`);
       }
       await wait(TARE_SETTLE_MS, isCanceled);
