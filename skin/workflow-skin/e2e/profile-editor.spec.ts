@@ -153,6 +153,8 @@ test("creates and reopens a profile in the visual editor with the saved step ord
     await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [startPoint] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [endPoint] });
+    await expect.poll(async () => (await sourceGrip.boundingBox())!.y).toBeLessThan(source.y - 20);
+    await expect(editor.locator(".recipe-step-card[data-dragging]")).toContainText("Finish");
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   } else {
     await page.mouse.move(startPoint.x, startPoint.y);
@@ -203,7 +205,7 @@ test("creates and reopens a profile in the visual editor with the saved step ord
   await expect(edit.getByLabel("Step 2 pressure goal")).toHaveValue("5");
 });
 
-test("touch reorders a step past the visible cards and preserves the volume start step", async ({ page }) => {
+test("touch shows a live reorder preview and can move a step past the visible cards", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 640 });
   const api = await routeProfileEditorApi(page);
   const touch = await page.context().newCDPSession(page);
@@ -231,8 +233,21 @@ test("touch reorders a step past the visible cards and preserves the volume star
   const dropTarget = rail.locator('[data-drop="after"]');
 
   await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x + 42, y: point.y }] });
+  await expect.poll(async () => (await firstGrip.boundingBox())!.x).toBeCloseTo(start.x + 42, 0);
+  await expect(rail.locator(".recipe-step-card[data-dragging]")).toContainText("Preinfusion");
+  await expect(dropTarget).toHaveCount(0);
+  await rail.screenshot({ path: testInfo.outputPath("profile-step-drag.png") });
+
+  await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x + 20, y: point.y }] });
+  await expect.poll(async () => (await firstGrip.boundingBox())!.x).toBeCloseTo(start.x + 20, 0);
+
   await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [edge] });
   await expect(dropTarget).toBeVisible();
+  await expect.poll(() => rail.locator(".recipe-step-card").nth(1).evaluate((card) =>
+    new DOMMatrixReadOnly(getComputedStyle(card).transform).m41
+  )).toBeLessThan(-100);
+  await expect(flow).toHaveAttribute("d", initialFlowPath!);
   await touch.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
   await expect(dropTarget).toHaveCount(0);
   await expect(firstGrip).toHaveCount(1);

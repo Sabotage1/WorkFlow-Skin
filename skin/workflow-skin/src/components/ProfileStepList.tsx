@@ -12,13 +12,20 @@ type Drag = {
   to: number;
   start: number;
   center: number;
+  size: number;
+  spacing: number;
   position: number;
   moved: boolean;
   frame: number;
 };
 
-function centerOf(bounds: DOMRect, horizontal: boolean) {
-  return horizontal ? bounds.left + bounds.width / 2 : bounds.top + bounds.height / 2;
+type DragPreview = Pick<Drag, "from" | "to" | "horizontal" | "spacing"> & { offset: number };
+
+function measureSlot(slot: Element, horizontal: boolean) {
+  const bounds = slot.getBoundingClientRect();
+  const start = horizontal ? bounds.left : bounds.top;
+  const size = horizontal ? bounds.width : bounds.height;
+  return { start, size, center: start + size / 2 };
 }
 
 export function ProfileStepList({ steps, selected, disabled, onSelect, onReorder }: {
@@ -30,18 +37,29 @@ export function ProfileStepList({ steps, selected, disabled, onSelect, onReorder
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
-  const [preview, setPreview] = useState<{ from: number; to: number } | null>(null);
+  const [preview, setPreview] = useState<DragPreview | null>(null);
   const [announcement, setAnnouncement] = useState("");
 
   useEffect(() => () => cancelAnimationFrame(dragRef.current?.frame ?? 0), []);
 
   function updateDestination(drag: Drag) {
     const center = drag.center + drag.position - drag.start;
+    const slots = Array.from(drag.list.children, (slot) => measureSlot(slot, drag.horizontal));
+    const source = slots[drag.from];
+    const last = slots[slots.length - 1];
+    if (!source || !last) return;
+
     let to = 0;
-    Array.from(drag.list.children).forEach((card, index) => {
-      if (index !== drag.from && center >= centerOf(card.getBoundingClientRect(), drag.horizontal)) to += 1;
+    slots.forEach((slot, index) => {
+      if (index !== drag.from && center >= slot.center) to += 1;
     });
-    if (!drag.moved || to !== drag.to) setPreview({ from: drag.from, to });
+
+    // Bound the preview to the list so a translated card cannot extend its scroll area.
+    const minCenter = slots[0].start + drag.size / 2;
+    const maxCenter = last.start + last.size - drag.size / 2;
+    const displayedCenter = Math.min(maxCenter, Math.max(minCenter, center));
+    setPreview({ from: drag.from, to, horizontal: drag.horizontal, spacing: drag.spacing,
+      offset: displayedCenter - source.center });
     drag.to = to;
     drag.moved = true;
   }
@@ -77,13 +95,16 @@ export function ProfileStepList({ steps, selected, disabled, onSelect, onReorder
   function startDrag(event: PointerEvent<HTMLButtonElement>, index: number) {
     const list = listRef.current;
     if (!list || disabled || event.button !== 0 || !event.isPrimary || dragRef.current) return;
-    const horizontal = getComputedStyle(list).gridAutoFlow === "column";
+    const layout = getComputedStyle(list);
+    const horizontal = layout.gridAutoFlow === "column";
+    const slot = measureSlot(list.children[index], horizontal);
+    const gap = Number.parseFloat(horizontal ? layout.columnGap : layout.rowGap) || 0;
     const position = horizontal ? event.clientX : event.clientY;
     const scrollArea = horizontal ? list : list.closest<HTMLElement>(".recipe-body") ?? list;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       pointerId: event.pointerId, list, scrollArea, horizontal, from: index, to: index,
-      start: position, center: centerOf(list.children[index].getBoundingClientRect(), horizontal),
+      start: position, center: slot.center, size: slot.size, spacing: slot.size + gap,
       position, moved: false, frame: 0
     };
   }
@@ -108,40 +129,51 @@ export function ProfileStepList({ steps, selected, disabled, onSelect, onReorder
   }
 
   return <>
-    <div ref={listRef} className="recipe-step-buttons">
+    <div ref={listRef} className="recipe-step-buttons" data-reordering={!!preview || undefined}>
       {steps.map((step, index) => {
         const name = profileText(step.name) || "Untitled step";
-        const drop = preview?.to === index && preview.from !== index ? index < preview.from ? "before" : "after" : undefined;
-        return <div key={index} className="recipe-step-card" data-selected={index === selected || undefined}
-          data-dragging={preview?.from === index || undefined} data-drop={drop}>
-          {steps.length > 1 && <button type="button" className="recipe-step-grip" disabled={disabled}
-            aria-label={`Reorder step ${index + 1}, ${name}`} aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
-            title="Drag or use the arrow keys to reorder"
-            onPointerDown={(event) => startDrag(event, index)}
-            onPointerMove={moveDrag}
-            onPointerUp={(event) => finishDrag(event, true)}
-            onPointerCancel={(event) => finishDrag(event)}
-            onLostPointerCapture={(event) => finishDrag(event)}
-            onClick={(event) => { if (event.detail === 0) onSelect(index); }}
-            onKeyDown={(event) => {
-              if (dragRef.current) {
-                if (event.key === "Escape") {
-                  event.stopPropagation();
-                  finishDrag();
+        const dragging = preview?.from === index;
+        const drop = preview?.to === index && !dragging ? index < preview.from ? "before" : "after" : undefined;
+        let offset = 0;
+        if (preview) {
+          const { from, to, spacing } = preview;
+          if (dragging) offset = preview.offset;
+          else if (from < index && index <= to) offset = -spacing;
+          else if (to <= index && index < from) offset = spacing;
+        }
+        const transform = offset ? `translate${preview?.horizontal ? "X" : "Y"}(${offset}px)` : undefined;
+        return <div key={index} className="recipe-step-slot">
+          <div className="recipe-step-card" data-selected={index === selected || undefined}
+            data-dragging={dragging || undefined} data-drop={drop} style={{ transform }}>
+            {steps.length > 1 && <button type="button" className="recipe-step-grip" disabled={disabled}
+              aria-label={`Reorder step ${index + 1}, ${name}`} aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+              title="Drag or use the arrow keys to reorder"
+              onPointerDown={(event) => startDrag(event, index)}
+              onPointerMove={moveDrag}
+              onPointerUp={(event) => finishDrag(event, true)}
+              onPointerCancel={(event) => finishDrag(event)}
+              onLostPointerCapture={(event) => finishDrag(event)}
+              onClick={(event) => { if (event.detail === 0) onSelect(index); }}
+              onKeyDown={(event) => {
+                if (dragRef.current) {
+                  if (event.key === "Escape") {
+                    event.stopPropagation();
+                    finishDrag();
+                  }
+                  return;
                 }
-                return;
-              }
-              const earlier = event.key === "ArrowUp" || event.key === "ArrowLeft";
-              if (!earlier && event.key !== "ArrowDown" && event.key !== "ArrowRight") return;
-              event.preventDefault();
-              reorder(index, index + (earlier ? -1 : 1), true);
-            }}>
-            <GripVertical aria-hidden="true" size={19} />
-          </button>}
-          <button type="button" className="recipe-step-choice" aria-pressed={index === selected} disabled={disabled} onClick={() => onSelect(index)}>
-            <span>{index + 1}</span>
-            <div><strong>{name}</strong><small>{stepSummary(step)}</small></div>
-          </button>
+                const earlier = event.key === "ArrowUp" || event.key === "ArrowLeft";
+                if (!earlier && event.key !== "ArrowDown" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                reorder(index, index + (earlier ? -1 : 1), true);
+              }}>
+              <GripVertical aria-hidden="true" size={19} />
+            </button>}
+            <button type="button" className="recipe-step-choice" aria-pressed={index === selected} disabled={disabled} onClick={() => onSelect(index)}>
+              <span>{index + 1}</span>
+              <div><strong>{name}</strong><small>{stepSummary(step)}</small></div>
+            </button>
+          </div>
         </div>;
       })}
     </div>

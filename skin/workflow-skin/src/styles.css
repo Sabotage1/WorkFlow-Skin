@@ -2326,6 +2326,11 @@ textarea {
   margin-top: 10px;
 }
 
+.recipe-step-slot {
+  display: grid;
+  min-width: 0;
+}
+
 .recipe-step-card {
   position: relative;
   display: flex;
@@ -2340,8 +2345,20 @@ textarea {
   box-shadow: inset 3px 0 0 var(--skin-accent);
 }
 
+.recipe-step-buttons[data-reordering] .recipe-step-card:not([data-dragging]) {
+  transition: transform 140ms ease-out;
+}
+
 .recipe-step-card[data-dragging] {
-  opacity: 0.55;
+  z-index: 1;
+  border-color: var(--skin-accent);
+  box-shadow: 0 3px 9px #0005;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recipe-step-buttons[data-reordering] .recipe-step-card:not([data-dragging]) {
+    transition: none;
+  }
 }
 
 .recipe-step-card[data-drop]::after {
@@ -2395,6 +2412,7 @@ textarea {
 }
 
 .recipe-step-grip:active {
+  color: var(--skin-text);
   cursor: grabbing;
 }
 
