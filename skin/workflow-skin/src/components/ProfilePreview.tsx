@@ -40,10 +40,10 @@ function stepSpans(steps: JsonMap[]) {
 }
 
 function DragValue({ x, y, value, width }: { x: number; y: number; value: string; width: number }) {
-  const labelWidth = 16 + value.length * 8;
-  const labelHeight = 23;
+  const labelWidth = 18 + value.length * 10;
+  const labelHeight = 28;
   const labelOnRight = x + 22 + labelWidth <= width - 2;
-  const labelBelow = y < 34;
+  const labelBelow = y < labelHeight + 10;
   const labelX = labelOnRight ? x + 22 : Math.max(2, x - labelWidth - 22);
   const labelY = labelBelow ? y + 8 : y - labelHeight - 8;
   const nearEdge = labelOnRight ? labelX + 4 : labelX + labelWidth - 4;
@@ -51,7 +51,7 @@ function DragValue({ x, y, value, width }: { x: number; y: number; value: string
   return <g className="recipe-chart-value" pointerEvents="none">
     <line x1={x} y1={y} x2={nearEdge} y2={labelBelow ? labelY + 4 : labelY + labelHeight - 4} stroke="currentColor" />
     <rect x={labelX} y={labelY} width={labelWidth} height={labelHeight} rx={6} />
-    <text x={labelX + labelWidth / 2} y={labelY + 16} textAnchor="middle">{value}</text>
+    <text x={labelX + labelWidth / 2} y={labelY + labelHeight / 2} textAnchor="middle" dominantBaseline="central">{value}</text>
   </g>;
 }
 

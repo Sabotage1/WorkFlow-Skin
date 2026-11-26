@@ -287,7 +287,9 @@ test("touch drags update graph labels and draft targets before the finger lifts"
     const scrollTop = await scrollPosition();
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
     await expect(valueLabel).toHaveText(`${original} ${unit}`);
-    await expect(valueLabel).toHaveCSS("font-weight", "800");
+    await expect(valueLabel).toHaveCSS("font-size", "15px");
+    await expect(valueLabel).toHaveCSS("font-weight", "900");
+    await expect(valueLabel).toHaveCSS("stroke-width", "0.45px");
     const startLabelY = Number(await valueLabel.getAttribute("y"));
 
     for (const [dy, expected] of [[-5, first], [-10, final]]) {

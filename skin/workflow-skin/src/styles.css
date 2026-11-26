@@ -2292,7 +2292,11 @@ textarea {
 
 .recipe-chart-value text {
   fill: var(--skin-text);
-  font: 800 12px ui-monospace, monospace;
+  stroke: var(--skin-text);
+  stroke-width: 0.45px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  font: 900 15px ui-monospace, monospace;
 }
 
 .recipe-step-layout {
