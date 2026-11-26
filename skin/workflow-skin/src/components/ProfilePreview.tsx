@@ -190,6 +190,7 @@ export function ProfilePreview({ steps, selected, disabled, onSelect, onTargetCh
                 onPointerDown={(event) => {
                   const bounds = chartRef.current?.getBoundingClientRect();
                   if (disabled || !bounds || event.button !== 0 || !event.isPrimary || dragRef.current) return;
+                  event.preventDefault();
                   const originalField = steps[index][track.key];
                   const nextDrag: Drag = {
                     pointerId: event.pointerId, index, target: track.key, startY: event.clientY,

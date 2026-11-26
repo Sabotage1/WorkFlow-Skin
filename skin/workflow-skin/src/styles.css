@@ -2223,6 +2223,9 @@ textarea {
   background: var(--skin-panel);
   padding: 12px;
   margin-bottom: 16px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .recipe-preview span,
@@ -2289,7 +2292,7 @@ textarea {
 
 .recipe-chart-value text {
   fill: var(--skin-text);
-  font: 600 12px ui-monospace, monospace;
+  font: 800 12px ui-monospace, monospace;
 }
 
 .recipe-step-layout {
@@ -2370,10 +2373,10 @@ textarea {
 
 .recipe-step-grip {
   display: grid;
-  place-items: start center;
+  place-items: center;
   flex: 0 0 44px;
   align-self: stretch;
-  padding: 10px 0 0;
+  padding: 0;
   border: 0;
   border-radius: 8px;
   background: transparent;

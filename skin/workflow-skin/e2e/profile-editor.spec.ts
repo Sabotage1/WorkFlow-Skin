@@ -139,7 +139,10 @@ test("creates and reopens a profile in the visual editor with the saved step ord
   await editor.getByLabel("Step 3 pressure goal").fill("5.5");
   await expect(editor.getByRole("button", { name: /^Move (earlier|later)$/ })).toHaveCount(0);
   await editor.locator(".recipe-step-buttons").scrollIntoViewIfNeeded();
-  const source = (await editor.getByRole("button", { name: "Reorder step 3, Finish" }).boundingBox())!;
+  const sourceGrip = editor.getByRole("button", { name: "Reorder step 3, Finish" });
+  const source = (await sourceGrip.boundingBox())!;
+  const dots = (await sourceGrip.locator("svg").boundingBox())!;
+  expect(Math.abs(dots.y + dots.height / 2 - (source.y + source.height / 2))).toBeLessThan(1);
   const number = (await editor.getByRole("button", { name: /Finish.*5.5 bar/ }).locator("span").boundingBox())!;
   expect(source.x + source.width).toBeLessThanOrEqual(number.x);
   const destination = (await editor.getByRole("button", { name: "Reorder step 2, Extraction" }).boundingBox())!;
@@ -268,6 +271,7 @@ test("touch drags update graph labels and draft targets before the finger lifts"
   const chart = editor.getByRole("img", { name: /Profile preview/ });
   const targets = chart.locator(".recipe-chart-target");
   const valueLabel = chart.locator(".recipe-chart-value text");
+  await expect(editor.locator(".recipe-preview")).toHaveCSS("user-select", "none");
   const scrollPosition = () => editor.locator(".recipe-body").evaluate((element) => element.scrollTop);
 
   for (const { line, field, unit, original, first, final, cancel } of [
@@ -283,6 +287,7 @@ test("touch drags update graph labels and draft targets before the finger lifts"
     const scrollTop = await scrollPosition();
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
     await expect(valueLabel).toHaveText(`${original} ${unit}`);
+    await expect(valueLabel).toHaveCSS("font-weight", "800");
     const startLabelY = Number(await valueLabel.getAttribute("y"));
 
     for (const [dy, expected] of [[-5, first], [-10, final]]) {
