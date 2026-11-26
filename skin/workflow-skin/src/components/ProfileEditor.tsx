@@ -3,9 +3,10 @@ import { createPortal } from "react-dom";
 import type { JsonMap, Profile, ProfileRecord } from "../api/types";
 import {
   importEditorProfile, initialEditorProfile, MAX_PROFILE_STEPS, newProfileStep, profileForSave,
-  profileNumber, profileObject, profilePump, profileText, validateEditorProfile
+  profileNumber, profileObject, profilePump, profileText, stepSummary, validateEditorProfile
 } from "../lib/profileEditor";
 import { ProfilePreview } from "./ProfilePreview";
+import { ProfileStepList } from "./ProfileStepList";
 
 const BEVERAGE_TYPES = ["espresso", "pourover", "manual", "cleaning", "calibrate"];
 const VIEWS = ["Steps", "Summary", "Details"] as const;
@@ -122,18 +123,6 @@ function StepInspector({ step, index, onChange }: { step: JsonMap; index: number
   </div>;
 }
 
-function stepSummary(step: JsonMap) {
-  const pump = profilePump(step);
-  const target = profileNumber(step[pump]);
-  const temperature = profileNumber(step.temperature);
-  const seconds = profileNumber(step.seconds);
-  return [
-    target === undefined ? "Target missing" : `${target} ${pump === "pressure" ? "bar" : "mL/s"}`,
-    temperature === undefined ? "Temp missing" : `${temperature} °C`,
-    seconds === undefined ? "Time missing" : `${seconds} s`
-  ].join(" · ");
-}
-
 function readProfileFile(file: File): Promise<Profile> {
   if (file.size > 1024 * 1024) return Promise.reject(new Error("Choose a profile JSON file under 1 MB."));
   return new Promise((resolve, reject) => {
@@ -204,12 +193,12 @@ export function ProfileEditor({ record, onClose, onSave, onCreate, onLoadVersion
     setError("");
   };
 
-  const move = (delta: number) => {
+  const reorder = (from: number, to: number) => {
+    if (requestPending.current || from === to || !steps[from] || !steps[to]) return;
     const next = [...steps];
-    const target = selected + delta;
-    if (!step || target < 0 || target >= next.length) return;
-    [next[selected], next[target]] = [next[target], next[selected]];
-    replaceSteps(next, target);
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    replaceSteps(next, to);
   };
 
   const select = (index: number) => { setSelected(index); setView("Steps"); };
@@ -318,8 +307,15 @@ export function ProfileEditor({ record, onClose, onSave, onCreate, onLoadVersion
             <h3>Profile preview</h3>
             <span>{steps.length} steps · {Number(totalSeconds.toFixed(1))} s max</span>
           </div>
-          <ProfilePreview steps={steps} selected={selected} onSelect={(index) => { if (!busy) select(index); }} />
-          <p>Programmed targets. Early exits can shorten steps.</p>
+          <ProfilePreview steps={steps} selected={selected} disabled={busy} onSelect={select}
+            onTargetChange={(index, key, value) => {
+              setError("");
+              setDraft((current) => ({
+                ...current,
+                steps: current.steps?.map((item, stepIndex) => stepIndex === index ? { ...item, [key]: value } : item)
+              }));
+            }} />
+          <p>Drag a line up or down to change its target. Early exits can shorten steps.</p>
         </section>}
 
         {view === "Steps" && <div className="recipe-step-layout">
@@ -332,20 +328,12 @@ export function ProfileEditor({ record, onClose, onSave, onCreate, onLoadVersion
                 replaceSteps(next, selected + 1);
               }}>Add step</button>
             </div>
-            <div className="recipe-step-buttons">
-              {steps.map((item, index) => <button key={index} type="button" className="recipe-step-choice"
-                aria-pressed={index === selected} disabled={busy} onClick={() => select(index)}>
-                <span>{index + 1}</span>
-                <div><strong>{profileText(item.name) || "Untitled step"}</strong><small>{stepSummary(item)}</small></div>
-              </button>)}
-            </div>
+            <ProfileStepList steps={steps} selected={selected} disabled={busy} onSelect={select} onReorder={reorder} />
           </section>
           {step && <section className="recipe-step-editor" aria-label={`Edit step ${selected + 1}`}>
             <div className="recipe-section-heading">
               <h3>Step {selected + 1}</h3>
               <div className="recipe-actions">
-                <button type="button" className="ghost-button" disabled={busy || selected === 0} onClick={() => move(-1)}>Move earlier</button>
-                <button type="button" className="ghost-button" disabled={busy || selected === steps.length - 1} onClick={() => move(1)}>Move later</button>
                 <button type="button" className="ghost-button" disabled={busy || steps.length >= MAX_PROFILE_STEPS} onClick={() => {
                   const next = [...steps];
                   next.splice(selected + 1, 0, { ...step, name: `${profileText(step.name) || "Step"} copy` });

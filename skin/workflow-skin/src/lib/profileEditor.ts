@@ -3,7 +3,8 @@ import type { JsonMap, Profile } from "../api/types";
 // The DE1 upload uses frame 32 onward for per-step limiter data. The tail
 // occupies the frame immediately after the last brew step.
 export const MAX_PROFILE_STEPS = 31;
-const MAX_PUMP_VALUE = 255 / 16;
+export const MAX_PUMP_VALUE = 255 / 16;
+export const MAX_STEP_TEMPERATURE = 127.5;
 
 export function profileObject(value: unknown): value is JsonMap {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -21,6 +22,18 @@ export function profileText(value: unknown): string {
 
 export function profilePump(step: JsonMap): "pressure" | "flow" {
   return step.pump === "flow" || (step.pump == null && profileNumber(step.flow) !== undefined) ? "flow" : "pressure";
+}
+
+export function stepSummary(step: JsonMap) {
+  const pump = profilePump(step);
+  const target = profileNumber(step[pump]);
+  const temperature = profileNumber(step.temperature);
+  const seconds = profileNumber(step.seconds);
+  return [
+    target === undefined ? "Target missing" : `${target} ${pump === "pressure" ? "bar" : "mL/s"}`,
+    temperature === undefined ? "Temp missing" : `${temperature} °C`,
+    seconds === undefined ? "Time missing" : `${seconds} s`
+  ].join(" · ");
 }
 
 export function newProfileStep(temperature = 93): JsonMap {
@@ -103,7 +116,7 @@ export function validateEditorProfile(profile: Profile): ProfileIssue | null {
       return { message: `${label} needs valid, nonnegative targets, duration and limits.`, step: index };
     }
     if (!withinLimit(step[pump], MAX_PUMP_VALUE) || !withinLimit(step.seconds, 127) ||
-        !withinLimit(step.volume, 1023) || !withinLimit(step.temperature, 127.5)) {
+        !withinLimit(step.volume, 1023) || !withinLimit(step.temperature, MAX_STEP_TEMPERATURE)) {
       return { message: `${label} exceeds a machine limit. Use up to 15.9375 bar or mL/s, 127 s, 1023 mL and 127.5 °C.`, step: index };
     }
     if (exit != null && (!profileObject(exit) || !["pressure", "flow"].includes(String(exit.type)) ||

@@ -137,16 +137,43 @@ test("creates and reopens a profile in the visual editor with the saved step ord
   await editor.getByLabel("Step 3 name", { exact: true }).fill("Finish");
   await editor.getByLabel("Step 3 seconds").fill("5");
   await editor.getByLabel("Step 3 pressure goal").fill("5.5");
-  await editor.getByRole("button", { name: "Move earlier", exact: true }).click();
+  await expect(editor.getByRole("button", { name: /^Move (earlier|later)$/ })).toHaveCount(0);
+  await editor.locator(".recipe-step-buttons").scrollIntoViewIfNeeded();
+  const source = (await editor.getByRole("button", { name: "Reorder step 3, Finish" }).boundingBox())!;
+  const number = (await editor.getByRole("button", { name: /Finish.*5.5 bar/ }).locator("span").boundingBox())!;
+  expect(source.x + source.width).toBeLessThanOrEqual(number.x);
+  const destination = (await editor.getByRole("button", { name: "Reorder step 2, Extraction" }).boundingBox())!;
+  const startPoint = { x: source.x + source.width / 2, y: source.y + source.height / 2 };
+  const endPoint = { x: destination.x + destination.width / 2, y: destination.y + destination.height / 2 - 5 };
+  if (testInfo.project.name === "tablet") {
+    const touch = await page.context().newCDPSession(page);
+    await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [startPoint] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [endPoint] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  } else {
+    await page.mouse.move(startPoint.x, startPoint.y);
+    await page.mouse.down();
+    await page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
+    await page.mouse.up();
+  }
   await expect(editor.getByLabel("Step 2 name", { exact: true })).toHaveValue("Finish");
+
+  const grip = editor.getByRole("button", { name: "Reorder step 2, Finish" });
+  await grip.press("ArrowUp");
+  const movedGrip = editor.getByRole("button", { name: "Reorder step 1, Finish" });
+  await expect(movedGrip).toBeFocused();
+  await movedGrip.press("ArrowDown");
+  await expect(grip).toBeFocused();
   await editor.getByRole("tab", { name: "Summary" }).click();
   await expect(editor.getByRole("heading", { name: "Recipe summary" })).toBeVisible();
   await expect(editor.getByText("3 steps · 40 s max")).toBeVisible();
   await editor.getByRole("tab", { name: "Details" }).click();
   await editor.getByLabel("Target weight", { exact: true }).fill("38");
-  await editor.getByLabel("Count water volume from").selectOption("2");
+  await expect(editor.getByLabel("Count water volume from")).toHaveValue("2");
   await editor.getByRole("tab", { name: "Steps" }).click();
   await editor.locator(".recipe-body").evaluate((element) => { element.scrollTop = 0; });
+  await expect(chart.locator(".recipe-chart-target")).toHaveCount(6);
   await page.screenshot({ path: testInfo.outputPath("visual-profile-editor.png") });
 
   api.rejectNextCreate();
@@ -171,6 +198,126 @@ test("creates and reopens a profile in the visual editor with the saved step ord
   await page.getByRole("button", { name: "Edit Quiet morning", exact: true }).click();
   await edit.getByRole("button", { name: /Finish.*5 bar/ }).click();
   await expect(edit.getByLabel("Step 2 pressure goal")).toHaveValue("5");
+});
+
+test("touch reorders a step past the visible cards and preserves the volume start step", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  const api = await routeProfileEditorApi(page);
+  const touch = await page.context().newCDPSession(page);
+  await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "New Profile", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New profile" });
+  await editor.getByLabel("Profile title").fill("Reordered by touch");
+  for (const index of [2, 3]) {
+    await editor.getByRole("button", { name: "Add step" }).click();
+    await editor.getByLabel(`Step ${index} name`, { exact: true }).fill(`Extra ${index - 1}`);
+  }
+
+  const rail = editor.locator(".recipe-step-buttons");
+  const flow = editor.getByRole("img", { name: /Profile preview/ }).locator(".recipe-chart-target").nth(3);
+  const initialFlowPath = await flow.getAttribute("d");
+  const firstGrip = editor.getByRole("button", { name: "Reorder step 1, Preinfusion" });
+  await rail.evaluate((rail) => { rail.scrollLeft = 0; });
+  await firstGrip.scrollIntoViewIfNeeded();
+  const start = (await firstGrip.boundingBox())!;
+  const bounds = (await rail.boundingBox())!;
+  const point = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
+  const edge = { x: bounds.x + bounds.width - 3, y: point.y };
+  const dropTarget = rail.locator('[data-drop="after"]');
+
+  await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [edge] });
+  await expect(dropTarget).toBeVisible();
+  await touch.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+  await expect(dropTarget).toHaveCount(0);
+  await expect(firstGrip).toHaveCount(1);
+  await expect(flow).toHaveAttribute("d", initialFlowPath!);
+
+  await rail.evaluate((rail) => { rail.scrollLeft = 0; });
+  await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [edge] });
+  await expect.poll(() => rail.evaluate((rail) => rail.scrollLeft)).toBeGreaterThan(0);
+  await expect(dropTarget).toContainText("Extraction");
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect(editor.getByLabel("Step 4 name", { exact: true })).toHaveValue("Preinfusion");
+  await expect(flow).not.toHaveAttribute("d", initialFlowPath!);
+  expect(api.created).toHaveLength(0);
+
+  await editor.getByRole("tab", { name: "Details" }).click();
+  await expect(editor.getByLabel("Count water volume from")).toHaveValue("2");
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor).toHaveCount(0);
+  expect(api.created[0].steps?.map((step) => step.name)).toEqual(["Extra 1", "Extra 2", "Extraction", "Preinfusion"]);
+  expect(api.created[0].target_volume_count_start).toBe(2);
+});
+
+test("touch drags update graph labels and draft targets before the finger lifts", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  const api = await routeProfileEditorApi(page);
+  const touch = await page.context().newCDPSession(page);
+  await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Profiles", exact: true }).click();
+  await page.getByRole("button", { name: "New Profile", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New profile" });
+  await editor.getByLabel("Profile title").fill("Touch edited");
+  await editor.getByRole("tab", { name: "Summary" }).click();
+
+  const chart = editor.getByRole("img", { name: /Profile preview/ });
+  const targets = chart.locator(".recipe-chart-target");
+  const valueLabel = chart.locator(".recipe-chart-value text");
+  const scrollPosition = () => editor.locator(".recipe-body").evaluate((element) => element.scrollTop);
+
+  for (const { line, field, unit, original, first, final, cancel } of [
+    { line: 0, field: "Step 2 pressure goal", unit: "bar", original: 8, first: 9.2, final: 10.4 },
+    { line: 1, field: "Step 1 flow goal", unit: "mL/s", original: 2, first: 2.8, final: 3.6 },
+    { line: 2, field: "Step 1 temperature", unit: "°C", original: 93, first: 94.5, final: 95.9, cancel: true },
+    { line: 3, field: "Step 2 temperature", unit: "°C", original: 93, first: 94.5, final: 95.9 }
+  ]) {
+    const point = await targets.nth(line).evaluate((element: SVGPathElement) => {
+      const center = element.getPointAtLength(element.getTotalLength() / 2).matrixTransform(element.getScreenCTM()!);
+      return { x: center.x, y: center.y };
+    });
+    const scrollTop = await scrollPosition();
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await expect(valueLabel).toHaveText(`${original} ${unit}`);
+    const startLabelY = Number(await valueLabel.getAttribute("y"));
+
+    for (const [dy, expected] of [[-5, first], [-10, final]]) {
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: dy === -5 ? point.x : 20, y: point.y + dy }]
+      });
+      await expect(valueLabel).toHaveText(`${expected} ${unit}`);
+      await expect(editor.getByLabel(field, { exact: true })).toHaveValue(String(expected));
+    }
+
+    if (line === 0) await chart.screenshot({ path: testInfo.outputPath("profile-target-drag.png") });
+    expect(Number(await valueLabel.getAttribute("y"))).toBeLessThan(startLabelY);
+    expect(await scrollPosition()).toBe(scrollTop);
+    expect(api.created).toHaveLength(0);
+    await touch.send("Input.dispatchTouchEvent", { type: cancel ? "touchCancel" : "touchEnd", touchPoints: [] });
+    await expect(valueLabel).toHaveCount(0);
+    await expect(editor.getByLabel(field, { exact: true })).toHaveValue(String(cancel ? original : final));
+  }
+
+  const bounds = (await chart.boundingBox())!;
+  const emptySpace = { x: bounds.x + 24, y: bounds.y + 190 };
+  await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [emptySpace] });
+  for (const dy of [30, 60, 90]) {
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: emptySpace.x, y: emptySpace.y - dy }]
+    });
+  }
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect.poll(scrollPosition).toBeGreaterThan(0);
+
+  await editor.getByRole("button", { name: "Create profile" }).click();
+  await expect(editor).toHaveCount(0);
+  expect(api.created[0].steps).toMatchObject([{ flow: 3.6, temperature: 93 }, { pressure: 10.4, temperature: 95.9 }]);
 });
 
 test("loads JSON into the editor and retains its extra fields until the user saves", async ({ page }) => {

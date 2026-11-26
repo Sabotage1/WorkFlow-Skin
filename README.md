@@ -6,9 +6,13 @@ This repository is the public home for the WorkFlow Skin release asset and the c
 
 Latest release:
 
-- [WorkFlow Skin v0.5.1](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.5.1)
+- [WorkFlow Skin v0.5.2](https://github.com/Sabotage1/WorkFlow-Skin/releases/tag/v0.5.2)
 - Release asset: `workflow-skin.zip`
 - Community API: `https://workflow-skin-community.sabotage1.workers.dev`
+
+In the profile editor, drag a pressure, flow or temperature line up or down to
+change its target. The graph shows the value and units as you drag. To reorder
+steps, drag their handles. You can also focus a handle and use the arrow keys.
 
 Tap **WorkFlow** at the top of the menu to collapse it. Tap **WF** to expand it again.
 The **Scale** button and the scale preparation for Work Flows send a second tare 0.5 seconds after the first.

@@ -2235,12 +2235,61 @@ textarea {
   margin: 2px 0 0;
 }
 
+.recipe-chart-frame {
+  margin-top: 4px;
+  cursor: pointer;
+}
+
 .recipe-chart {
   display: block;
   width: 100%;
   height: 228px;
-  margin-top: 4px;
-  cursor: pointer;
+  /* Empty plot space passes touches through to the scrollable editor. */
+  pointer-events: none;
+  touch-action: none;
+}
+
+.recipe-chart text {
+  fill: var(--skin-muted);
+  font: 12px system-ui, sans-serif;
+}
+
+.recipe-chart .recipe-chart-scale {
+  font-size: 10px;
+}
+
+.recipe-chart-selection {
+  fill: var(--skin-accent);
+  opacity: 0.1;
+}
+
+.recipe-chart-grid {
+  stroke: var(--skin-border);
+}
+
+.recipe-chart-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  pointer-events: none;
+}
+
+.recipe-chart-target {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 36;
+  pointer-events: stroke;
+  cursor: ns-resize;
+}
+
+.recipe-chart-value rect {
+  fill: var(--skin-bg);
+  stroke: currentColor;
+}
+
+.recipe-chart-value text {
+  fill: var(--skin-text);
+  font: 600 12px ui-monospace, monospace;
 }
 
 .recipe-step-layout {
@@ -2270,24 +2319,91 @@ textarea {
   margin-top: 10px;
 }
 
-.recipe-step-choice {
-  display: grid;
-  grid-template-columns: 25px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-  text-align: left;
-  width: 100%;
-  padding: 10px;
+.recipe-step-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
   border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: var(--skin-surface);
+}
+
+.recipe-step-card[data-selected] {
+  border-color: var(--skin-accent);
+  box-shadow: inset 3px 0 0 var(--skin-accent);
+}
+
+.recipe-step-card[data-dragging] {
+  opacity: 0.55;
+}
+
+.recipe-step-card[data-drop]::after {
+  content: "";
+  position: absolute;
+  inset: -2px 3px auto;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--skin-accent);
+  pointer-events: none;
+}
+
+.recipe-step-card[data-drop="after"]::after {
+  inset: auto 3px -2px;
+}
+
+.recipe-step-choice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--skin-text);
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
-.recipe-step-choice[aria-pressed="true"] {
-  border-color: var(--skin-accent);
-  box-shadow: inset 3px 0 0 var(--skin-accent);
+.recipe-step-grip {
+  display: grid;
+  place-items: start center;
+  flex: 0 0 44px;
+  align-self: stretch;
+  padding: 10px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--skin-muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.recipe-step-grip + .recipe-step-choice {
+  padding-left: 0;
+}
+
+.recipe-step-grip:active {
+  cursor: grabbing;
+}
+
+.recipe-step-grip:focus-visible,
+.recipe-step-choice:focus-visible {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: -3px;
+}
+
+.recipe-step-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .recipe-step-choice > span,
@@ -2408,10 +2524,16 @@ textarea {
   .recipe-step-layout { grid-template-columns: minmax(0, 1fr); }
   .recipe-step-buttons {
     grid-auto-flow: column;
-    grid-auto-columns: minmax(130px, 42%);
+    grid-auto-columns: minmax(168px, 48%);
     overflow-x: auto;
     padding-bottom: 4px;
   }
+  .recipe-step-card[data-drop]::after {
+    inset: 3px auto 3px 0;
+    width: 3px;
+    height: auto;
+  }
+  .recipe-step-card[data-drop="after"]::after { inset: 3px 0 3px auto; }
   .recipe-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
